@@ -1,0 +1,9 @@
+"""Time helpers keep persisted timestamps timezone-aware and testable."""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+
+
+def utc_now() -> datetime:
+    return datetime.now(UTC)
