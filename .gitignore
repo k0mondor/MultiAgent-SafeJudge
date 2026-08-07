@@ -28,6 +28,7 @@ data/formal/
 vendor/
 artifacts/
 runs/
+scripts/build_mixed_suite.py
 .tmp/
 tmp/
 *.sqlite
