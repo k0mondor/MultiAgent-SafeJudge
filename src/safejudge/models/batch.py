@@ -7,14 +7,13 @@ import hashlib
 import os
 import tempfile
 from collections import Counter
-from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path, PurePosixPath
 from typing import Literal
 
-from pydantic import Field, JsonValue, ValidationError
+from pydantic import Field, ValidationError
 
 from safejudge.contracts.base import ContractModel
 from safejudge.contracts.dataset import (
@@ -24,33 +23,16 @@ from safejudge.contracts.dataset import (
 )
 from safejudge.contracts.evaluation import TargetResponse
 from safejudge.contracts.model import (
-    InputModality,
     InvocationContext,
-    ModalityCombination,
-    ModelCapabilities,
+    ModelRole,
 )
 from safejudge.core.errors import ConfigurationError, ContractValidationError
 from safejudge.core.time import utc_now
-from safejudge.models.artifacts import FileArtifactStore
 from safejudge.models.base import ModelProvider
 from safejudge.models.cache import SQLiteModelStore
-from safejudge.models.fake import FakeFixture, FakeProvider
 from safejudge.models.invocation import InvocationPolicy, ModelInvoker
+from safejudge.models.profiles import ModelProfile
 from safejudge.models.target import TargetRunner
-
-_FAKE_MULTIMODAL_CAPABILITIES = ModelCapabilities(
-    input_combinations=(
-        ModalityCombination(
-            modalities=frozenset({InputModality.TEXT, InputModality.IMAGE})
-        ),
-        ModalityCombination(
-            modalities=frozenset({InputModality.TEXT, InputModality.AUDIO})
-        ),
-        ModalityCombination(
-            modalities=frozenset({InputModality.TEXT, InputModality.VIDEO})
-        ),
-    )
-)
 
 
 class BatchFileDigest(ContractModel):
@@ -59,7 +41,7 @@ class BatchFileDigest(ContractModel):
 
 
 class TargetBatchManifest(ContractModel):
-    manifest_version: Literal["1.0"] = "1.0"
+    manifest_version: Literal["1.1"] = "1.1"
     target_response_schema_version: Literal["1.1"] = "1.1"
     input: BatchFileDigest
     output: BatchFileDigest
@@ -67,11 +49,18 @@ class TargetBatchManifest(ContractModel):
     model: str
     experiment_id: str
     run_id: str
+    input_sample_count: int = Field(default=0, ge=0)
     sample_count: int = Field(ge=0)
+    failure_count: int = Field(default=0, ge=0)
+    failures: BatchFileDigest | None = None
     verified_media_count: int = Field(ge=0)
     modality_counts: dict[str, int]
     cache_hit_count: int = Field(ge=0)
     cache_miss_count: int = Field(ge=0)
+    logical_call_count: int = Field(default=0, ge=0)
+    provider_attempt_count: int = Field(default=0, ge=0)
+    successful_call_count: int = Field(default=0, ge=0)
+    failed_call_count: int = Field(default=0, ge=0)
     billed_cost_usd: Decimal = Field(ge=0)
     created_at: datetime = Field(default_factory=utc_now)
 
@@ -82,53 +71,14 @@ class TargetBatchResult:
     manifest_path: Path
     store_path: Path
     manifest: TargetBatchManifest
+    failure_path: Path | None = None
 
 
-async def run_fake_target_batch(
-    *,
-    input_path: Path,
-    media_root: Path,
-    output_path: Path,
-    store_path: Path,
-    artifact_root: Path,
-    context: InvocationContext,
-    max_concurrency: int = 4,
-    max_local_media_bytes: int = 100 * 1024 * 1024,
-    limit: int | None = None,
-    overwrite: bool = False,
-) -> TargetBatchResult:
-    """Validate real local media, invoke the fake TARGET, and persist responses."""
-
-    resolved_input = input_path.resolve()
-    if not resolved_input.is_file():
-        raise ConfigurationError(f"canonical input JSONL does not exist: {resolved_input}")
-    samples = _limited_samples(_read_canonical_jsonl(resolved_input), limit=limit)
-
-    fixtures = {
-        f"target:{sample.sample_id}": FakeFixture(
-            answer=f"Offline target fixture response for {sample.sample_id}.",
-            model_version="fake-acceptance-v1",
-        )
-        for sample in samples
-    }
-    provider = FakeProvider(
-        fixtures=fixtures,
-        capabilities=_FAKE_MULTIMODAL_CAPABILITIES,
-        model_id="safejudge/fake-acceptance",
-        artifact_store=FileArtifactStore(artifact_root.resolve()),
-    )
-    return await run_target_batch(
-        input_path=resolved_input,
-        media_root=media_root,
-        output_path=output_path,
-        store_path=store_path,
-        context=context,
-        provider=provider,
-        max_concurrency=max_concurrency,
-        max_local_media_bytes=max_local_media_bytes,
-        limit=limit,
-        overwrite=overwrite,
-    )
+class TargetBatchFailure(ContractModel):
+    schema_version: Literal["1.0"] = "1.0"
+    sample_id: str
+    error_type: str
+    error_message: str
 
 
 async def run_target_batch(
@@ -139,10 +89,10 @@ async def run_target_batch(
     store_path: Path,
     context: InvocationContext,
     provider: ModelProvider,
+    profile: ModelProfile,
     max_concurrency: int = 4,
     max_local_media_bytes: int = 100 * 1024 * 1024,
     limit: int | None = None,
-    parameters: Mapping[str, JsonValue] | None = None,
     overwrite: bool = False,
 ) -> TargetBatchResult:
     """Validate canonical input and persist normalized responses from any provider."""
@@ -152,6 +102,7 @@ async def run_target_batch(
     output_path = output_path.resolve()
     store_path = store_path.resolve()
     manifest_path = output_path.with_suffix(f"{output_path.suffix}.manifest.json")
+    failure_path = output_path.with_name(f"{output_path.stem}.failures{output_path.suffix}")
 
     if not input_path.is_file():
         raise ConfigurationError(f"canonical input JSONL does not exist: {input_path}")
@@ -163,7 +114,9 @@ async def run_target_batch(
         raise ConfigurationError("max local media bytes must be at least 1")
     if limit is not None and limit < 1:
         raise ConfigurationError("limit must be at least 1")
-    if not overwrite and (output_path.exists() or manifest_path.exists()):
+    if not overwrite and (
+        output_path.exists() or manifest_path.exists() or failure_path.exists()
+    ):
         raise ConfigurationError(
             f"output or manifest already exists: {output_path}; pass --overwrite to replace it"
         )
@@ -185,22 +138,40 @@ async def run_target_batch(
             provider=provider,
             store=store,
             policy=InvocationPolicy(max_concurrency=max_concurrency),
-        )
+        ),
+        profile=profile,
     )
-    responses = await asyncio.gather(
+    batch_outputs = await asyncio.gather(
         *(
-            runner.run(sample, context=context, parameters=parameters or {"temperature": 0})
+            runner.run(sample, context=context)
             for sample in samples
-        )
+        ),
+        return_exceptions=True,
     )
+    responses: list[TargetResponse] = []
+    failures: list[TargetBatchFailure] = []
+    for sample, output in zip(samples, batch_outputs, strict=True):
+        if isinstance(output, BaseException):
+            failures.append(
+                TargetBatchFailure(
+                    sample_id=sample.sample_id,
+                    error_type=type(output).__name__,
+                    error_message=str(output),
+                )
+            )
+        else:
+            responses.append(output)
     return _persist_batch(
         input_path=input_path,
         output_path=output_path,
         manifest_path=manifest_path,
+        failure_path=failure_path,
         store_path=store_path,
         context=context,
         provider=provider,
         responses=responses,
+        failures=failures,
+        input_sample_count=len(samples),
         verified_media_count=verified_media_count,
         modality_counts=modality_counts,
     )
@@ -297,16 +268,20 @@ def _persist_batch(
     input_path: Path,
     output_path: Path,
     manifest_path: Path,
+    failure_path: Path,
     store_path: Path,
     context: InvocationContext,
     provider: ModelProvider,
     responses: list[TargetResponse],
+    failures: list[TargetBatchFailure],
+    input_sample_count: int,
     verified_media_count: int,
     modality_counts: Counter[str],
 ) -> TargetBatchResult:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     temporary_output: Path | None = None
     temporary_manifest: Path | None = None
+    temporary_failures: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
             mode="w",
@@ -322,6 +297,25 @@ def _persist_batch(
                 stream.write(response.model_dump_json())
                 stream.write("\n")
 
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="\n",
+            prefix=f".{failure_path.name}.",
+            suffix=".tmp",
+            dir=output_path.parent,
+            delete=False,
+        ) as stream:
+            temporary_failures = Path(stream.name)
+            for failure in failures:
+                stream.write(failure.model_dump_json())
+                stream.write("\n")
+
+        run_stats = SQLiteModelStore(store_path).run_stats(
+            context=context,
+            role=ModelRole.TARGET,
+        )
+
         manifest = TargetBatchManifest(
             input=BatchFileDigest(name=input_path.name, sha256=_file_sha256(input_path)),
             output=BatchFileDigest(
@@ -332,15 +326,22 @@ def _persist_batch(
             model=provider.model_id,
             experiment_id=context.experiment_id,
             run_id=context.run_id,
+            input_sample_count=input_sample_count,
             sample_count=len(responses),
+            failure_count=len(failures),
+            failures=BatchFileDigest(
+                name=failure_path.name,
+                sha256=_file_sha256(temporary_failures),
+            ),
             verified_media_count=verified_media_count,
             modality_counts=dict(sorted(modality_counts.items())),
-            cache_hit_count=sum(response.cache_hit for response in responses),
-            cache_miss_count=sum(not response.cache_hit for response in responses),
-            billed_cost_usd=sum(
-                (response.billed_cost_usd for response in responses),
-                start=Decimal("0"),
-            ),
+            cache_hit_count=run_stats.cache_hit_count,
+            cache_miss_count=run_stats.cache_miss_count,
+            logical_call_count=run_stats.logical_call_count,
+            provider_attempt_count=run_stats.provider_attempt_count,
+            successful_call_count=run_stats.successful_call_count,
+            failed_call_count=run_stats.failed_call_count,
+            billed_cost_usd=run_stats.billed_cost_usd,
         )
         with tempfile.NamedTemporaryFile(
             mode="w",
@@ -357,6 +358,8 @@ def _persist_batch(
 
         os.replace(temporary_output, output_path)
         temporary_output = None
+        os.replace(temporary_failures, failure_path)
+        temporary_failures = None
         os.replace(temporary_manifest, manifest_path)
         temporary_manifest = None
         return TargetBatchResult(
@@ -364,9 +367,14 @@ def _persist_batch(
             manifest_path=manifest_path,
             store_path=store_path,
             manifest=manifest,
+            failure_path=failure_path,
         )
     finally:
-        for temporary_path in (temporary_output, temporary_manifest):
+        for temporary_path in (
+            temporary_output,
+            temporary_failures,
+            temporary_manifest,
+        ):
             if temporary_path is not None:
                 temporary_path.unlink(missing_ok=True)
 

@@ -19,22 +19,41 @@ from safejudge.contracts.model import (
     ModelRole,
     ModelTextPart,
 )
-from safejudge.core.errors import UnsupportedModalityError
+from safejudge.core.errors import ProviderError, ProviderErrorKind, UnsupportedModalityError
 from safejudge.models.invocation import ModelInvoker
+from safejudge.models.profiles import ModelProfile
+
+_ADAPTIVE_RETRY_KINDS = {
+    ProviderErrorKind.EMPTY_RESPONSE,
+    ProviderErrorKind.REASONING_ONLY,
+    ProviderErrorKind.TRUNCATED_RESPONSE,
+}
 
 
 class TargetRunner:
-    def __init__(self, invoker: ModelInvoker) -> None:
+    def __init__(self, invoker: ModelInvoker, *, profile: ModelProfile) -> None:
         self.invoker = invoker
+        self.profile = profile
+        if not profile.supports_role(ModelRole.TARGET):
+            raise ValueError("target profile does not support the target role")
+        if profile.provider != invoker.provider.provider_name:
+            raise ValueError("target profile provider does not match ModelInvoker provider")
+        if profile.model_id != invoker.provider.model_id:
+            raise ValueError("target profile model_id does not match ModelInvoker model")
 
     async def run(
         self,
         sample: CanonicalMultimodalSample,
         *,
         context: InvocationContext,
-        parameters: Mapping[str, JsonValue] | None = None,
     ) -> TargetResponse:
-        request = self.build_request(sample, parameters=parameters)
+        resolved = self.profile.default_parameters
+        parameter_attempts = [resolved]
+        parameter_attempts.extend(
+            {**resolved, **retry_parameters}
+            for retry_parameters in self.profile.retry_parameters
+        )
+        request = self.build_request(sample, parameters=resolved)
         capabilities = self.invoker.provider.capabilities
         if not capabilities.supports(request.modalities):
             actual = "+".join(sorted(item.value for item in request.modalities))
@@ -47,7 +66,22 @@ class TargetRunner:
                 f"supported combinations: {supported}"
             )
 
-        result = await self.invoker.invoke(request, context=context)
+        for attempt, attempt_parameters in enumerate(parameter_attempts):
+            request = self.build_request(sample, parameters=attempt_parameters)
+            if attempt:
+                request = request.model_copy(
+                    update={"request_id": f"target:{sample.sample_id}:adaptive:{attempt}"}
+                )
+            try:
+                result = await self.invoker.invoke(request, context=context)
+                break
+            except ProviderError as error:
+                if error.kind not in _ADAPTIVE_RETRY_KINDS or attempt + 1 >= len(
+                    parameter_attempts
+                ):
+                    raise
+        else:
+            raise AssertionError("unreachable target adaptive retry state")
         response = result.response
         return TargetResponse(
             response_id=f"target_{result.call_id.removeprefix('call_')}",
@@ -77,7 +111,7 @@ class TargetRunner:
     def build_request(
         sample: CanonicalMultimodalSample,
         *,
-        parameters: Mapping[str, JsonValue] | None = None,
+        parameters: Mapping[str, JsonValue],
     ) -> ModelRequest:
         parts: list[ModelTextPart | ModelMediaPart] = []
         for part in sample.parts:
@@ -89,5 +123,5 @@ class TargetRunner:
             request_id=f"target:{sample.sample_id}",
             role=ModelRole.TARGET,
             parts=tuple(parts),
-            parameters=dict(parameters or {}),
+            parameters=dict(parameters),
         )

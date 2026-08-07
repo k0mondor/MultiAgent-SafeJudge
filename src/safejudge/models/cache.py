@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -12,6 +13,18 @@ from pathlib import Path
 from safejudge.contracts.artifact import ArtifactRef
 from safejudge.contracts.model import InvocationContext, ModelRequest, ModelResponse, ModelRole
 from safejudge.core.errors import ProviderErrorKind
+
+
+@dataclass(frozen=True, slots=True)
+class ModelRunStats:
+    logical_call_count: int
+    provider_attempt_count: int
+    contract_repair_call_count: int
+    successful_call_count: int
+    failed_call_count: int
+    cache_hit_count: int
+    cache_miss_count: int
+    billed_cost_usd: Decimal
 
 
 def stable_request_hash(*, provider: str, model: str, request: ModelRequest) -> str:
@@ -58,6 +71,7 @@ class SQLiteModelStore:
                 );
                 CREATE TABLE IF NOT EXISTS model_calls (
                     call_id TEXT PRIMARY KEY,
+                    request_id TEXT NOT NULL,
                     cache_key TEXT NOT NULL,
                     experiment_id TEXT NOT NULL,
                     run_id TEXT NOT NULL,
@@ -110,6 +124,11 @@ class SQLiteModelStore:
             if "run_id" not in columns:
                 connection.execute(
                     "ALTER TABLE model_calls ADD COLUMN run_id TEXT NOT NULL DEFAULT 'legacy'"
+                )
+            if "request_id" not in columns:
+                connection.execute(
+                    "ALTER TABLE model_calls ADD COLUMN request_id "
+                    "TEXT NOT NULL DEFAULT 'legacy'"
                 )
             artifact_columns = {
                 "raw_artifact_uri": "TEXT",
@@ -279,16 +298,17 @@ class SQLiteModelStore:
             connection.execute(
                 """
                 INSERT INTO model_calls(
-                    call_id, cache_key, experiment_id, run_id, role,
+                    call_id, request_id, cache_key, experiment_id, run_id, role,
                     provider, model, status, cache_hit,
                     attempts, estimated_usd, actual_usd, billed_usd, response_id,
                     raw_artifact_uri, raw_artifact_sha256,
                     raw_artifact_content_type, raw_artifact_size_bytes,
                     error_kind, error_message, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     call_id,
+                    request.request_id,
                     cache_key,
                     context.experiment_id,
                     context.run_id,
@@ -338,6 +358,35 @@ class SQLiteModelStore:
             row = connection.execute(query, parameters).fetchone()
         assert row is not None
         return int(row[0])
+
+    def run_stats(
+        self,
+        *,
+        context: InvocationContext,
+        role: ModelRole,
+    ) -> ModelRunStats:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT request_id, status, cache_hit, attempts, billed_usd
+                FROM model_calls
+                WHERE experiment_id = ? AND run_id = ? AND role = ?
+                """,
+                (context.experiment_id, context.run_id, role.value),
+            ).fetchall()
+        return ModelRunStats(
+            logical_call_count=len(rows),
+            provider_attempt_count=sum(int(row[3]) for row in rows),
+            contract_repair_call_count=sum(":repair:" in str(row[0]) for row in rows),
+            successful_call_count=sum(row[1] == "success" for row in rows),
+            failed_call_count=sum(row[1] == "failed" for row in rows),
+            cache_hit_count=sum(bool(row[2]) for row in rows),
+            cache_miss_count=sum(not bool(row[2]) for row in rows),
+            billed_cost_usd=sum(
+                (Decimal(str(row[4])) for row in rows),
+                start=Decimal("0"),
+            ),
+        )
 
 
 def _response_cost(response: ModelResponse) -> tuple[Decimal, Decimal | None]:

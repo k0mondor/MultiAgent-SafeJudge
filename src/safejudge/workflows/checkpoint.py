@@ -10,6 +10,7 @@ import aiosqlite
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
+from safejudge.constitution.router import ConstitutionRoute, ConstitutionRouteAction
 from safejudge.contracts.artifact import ArtifactRef
 from safejudge.contracts.dataset import (
     CanonicalMultimodalSample,
@@ -33,6 +34,10 @@ from safejudge.contracts.evaluation import (
 from safejudge.contracts.judging import (
     AggregateDecision,
     ArbitrationDecision,
+    ArbitrationResolutionStatus,
+    ComplianceReasonCode,
+    DecisionStatus,
+    EnablementReasonCode,
     EnablementScores,
     EvaluationResult,
     EvaluationSpec,
@@ -40,10 +45,23 @@ from safejudge.contracts.judging import (
     IntentAnalysis,
     JudgeAxis,
     JudgeCallTrace,
+    JudgeExecutionFailure,
+    JudgeFailureCode,
     JudgeLabel,
     JudgeModelRef,
     JudgeVerdict,
+    OversensitivityReasonCode,
     RequestSnapshot,
+    ReviewReasonCode,
+    ScopeStatus,
+)
+from safejudge.grounding.contracts import (
+    GroundingArtifact,
+    GroundingMode,
+    GroundingObservation,
+    GroundingStatus,
+    ObservationModality,
+    RawGroundingObservation,
 )
 from safejudge.workflows.graph import (
     EvaluationInput,
@@ -72,7 +90,11 @@ _CHECKPOINT_TYPES = (
     TargetResponse,
     TokenUsage,
     AggregateDecision,
+    ArbitrationResolutionStatus,
     ArbitrationDecision,
+    ComplianceReasonCode,
+    DecisionStatus,
+    EnablementReasonCode,
     EnablementScores,
     EvaluationSpec,
     EvaluationResult,
@@ -80,10 +102,23 @@ _CHECKPOINT_TYPES = (
     IntentAnalysis,
     JudgeAxis,
     JudgeCallTrace,
+    JudgeExecutionFailure,
+    JudgeFailureCode,
     JudgeLabel,
     JudgeModelRef,
     JudgeVerdict,
+    OversensitivityReasonCode,
+    ReviewReasonCode,
     RequestSnapshot,
+    ScopeStatus,
+    ConstitutionRoute,
+    ConstitutionRouteAction,
+    GroundingArtifact,
+    GroundingMode,
+    GroundingObservation,
+    GroundingStatus,
+    ObservationModality,
+    RawGroundingObservation,
     EvaluationInput,
     EvaluationOutput,
     EvaluationState,

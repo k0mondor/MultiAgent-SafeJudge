@@ -6,12 +6,10 @@ from safejudge.models.local_openai import (
     LocalOpenAIProvider,
     LocalOpenAISettings,
 )
-from safejudge.models.local_transformers import LocalTransformersProvider
 
 __all__ = [
     "JudgeOpenAISettings",
     "LocalOpenAIProvider",
     "LocalOpenAISettings",
-    "LocalTransformersProvider",
     "ModelProvider",
 ]

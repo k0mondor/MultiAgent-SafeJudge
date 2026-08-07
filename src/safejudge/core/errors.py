@@ -19,6 +19,25 @@ class ContractValidationError(SafeJudgeError):
     """External data does not satisfy a versioned project contract."""
 
 
+class JudgeContractError(ContractValidationError):
+    """A judge exhausted contract repairs; carries the last auditable response."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        request_id: str,
+        call_id: str,
+        provider_response_id: str,
+        raw_artifact: ArtifactRef | None,
+    ) -> None:
+        super().__init__(message)
+        self.request_id = request_id
+        self.call_id = call_id
+        self.provider_response_id = provider_response_id
+        self.raw_artifact = raw_artifact
+
+
 class AdapterError(SafeJudgeError):
     """A dataset adapter could not convert a source record."""
 
@@ -35,6 +54,9 @@ class ProviderErrorKind(StrEnum):
     INSUFFICIENT_CREDITS = "insufficient_credits"
     INVALID_REQUEST = "invalid_request"
     CONTENT_POLICY = "content_policy"
+    REASONING_ONLY = "reasoning_only"
+    EMPTY_RESPONSE = "empty_response"
+    TRUNCATED_RESPONSE = "truncated_response"
     MALFORMED_RESPONSE = "malformed_response"
     ARTIFACT_PERSISTENCE = "artifact_persistence"
     UNKNOWN = "unknown"

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import json
 import os
 import tempfile
 from collections import Counter
@@ -18,24 +17,29 @@ from typing import Literal, cast
 from langchain_core.runnables import RunnableConfig
 from pydantic import Field, JsonValue, ValidationError
 
+from safejudge.constitution.contracts import ConstitutionPack
+from safejudge.constitution.registry import ConstitutionRegistry
 from safejudge.contracts.base import ContractModel
-from safejudge.contracts.dataset import CanonicalMultimodalSample, RequestIntent, Sha256
+from safejudge.contracts.dataset import CanonicalMultimodalSample, Sha256
 from safejudge.contracts.evaluation import TargetResponse
-from safejudge.contracts.judging import EvaluationResult
+from safejudge.contracts.judging import AggregateDecision, EvaluationResult
+from safejudge.contracts.jury import (
+    JuryDefinition,
+    JuryIdentity,
+    JurySeat,
+)
 from safejudge.contracts.model import (
-    InputModality,
     InvocationContext,
-    ModalityCombination,
-    ModelCapabilities,
+    ModelRole,
 )
 from safejudge.core.errors import ConfigurationError, ContractValidationError
 from safejudge.core.time import utc_now
 from safejudge.datasets.readers import iter_mapping_records
-from safejudge.models.artifacts import FileArtifactStore
+from safejudge.grounding.contracts import GroundingMode
+from safejudge.grounding.pipeline import GroundingPipeline
 from safejudge.models.base import ModelProvider
 from safejudge.models.cache import SQLiteModelStore
-from safejudge.models.fake import FakeFixture, FakeProvider
-from safejudge.models.invocation import InvocationPolicy, ModelInvoker
+from safejudge.models.invocation import InvocationPolicy
 from safejudge.workflows.checkpoint import sqlite_checkpointer
 from safejudge.workflows.graph import (
     EvaluationContext,
@@ -43,12 +47,8 @@ from safejudge.workflows.graph import (
     build_evaluation_graph,
     create_evaluation_identity,
 )
-from safejudge.workflows.judge import JudgeRunner
+from safejudge.workflows.jury import build_jury_runtime
 from safejudge.workflows.ledger import SQLiteNodeLedger
-
-_TEXT_CAPABILITIES = ModelCapabilities(
-    input_combinations=(ModalityCombination(modalities=frozenset({InputModality.TEXT})),)
-)
 
 
 class EvaluationFileDigest(ContractModel):
@@ -57,17 +57,34 @@ class EvaluationFileDigest(ContractModel):
 
 
 class EvaluationBatchManifest(ContractModel):
-    manifest_version: Literal["1.0"] = "1.0"
-    evaluation_result_schema_version: Literal["1.2"] = "1.2"
+    manifest_version: Literal["3.0"] = "3.0"
+    evaluation_result_schema_version: Literal["3.0"] = "3.0"
     samples_input: EvaluationFileDigest
     targets_input: EvaluationFileDigest
     output: EvaluationFileDigest
-    judge_provider: str
-    judge_model: str
+    failures_output: EvaluationFileDigest
+    jury: JuryIdentity
+    jury_hash: Sha256
+    constitution_id: str
+    constitution_version: str
+    constitution_hash: Sha256
+    grounding_mode: GroundingMode
+    grounding_pipeline_id: str
+    grounding_pipeline_version: str
+    grounding_pipeline_hash: Sha256
+    semantic_gold_status: Literal["unlabeled", "human_labeled"] = "unlabeled"
     experiment_id: str
     run_id: str
+    input_sample_count: int = Field(ge=0)
     sample_count: int = Field(ge=0)
+    failure_count: int = Field(ge=0)
+    judge_failure_count: int = Field(ge=0)
     arbitration_count: int = Field(ge=0)
+    logical_call_count: int = Field(ge=0)
+    provider_attempt_count: int = Field(ge=0)
+    contract_repair_call_count: int = Field(ge=0)
+    successful_call_count: int = Field(ge=0)
+    failed_call_count: int = Field(ge=0)
     cache_hit_count: int = Field(ge=0)
     cache_miss_count: int = Field(ge=0)
     billed_cost_usd: Decimal = Field(ge=0)
@@ -79,82 +96,19 @@ class EvaluationBatchManifest(ContractModel):
 class EvaluationBatchResult:
     output_path: Path
     manifest_path: Path
+    failure_path: Path
     store_path: Path
     checkpoint_path: Path
     node_ledger_path: Path
     manifest: EvaluationBatchManifest
 
 
-async def run_fake_evaluation_batch(
-    *,
-    samples_path: Path,
-    target_responses_path: Path,
-    output_path: Path,
-    store_path: Path,
-    checkpoint_path: Path,
-    node_ledger_path: Path,
-    artifact_root: Path,
-    context: InvocationContext,
-    max_concurrency: int = 3,
-    max_sample_concurrency: int = 1,
-    limit: int | None = None,
-    overwrite: bool = False,
-) -> EvaluationBatchResult:
-    samples = _limited(_read_samples(samples_path.resolve()), limit)
-    targets = _read_targets(target_responses_path.resolve())
-    fixtures: dict[str, FakeFixture] = {}
-    for sample in samples:
-        target = _target_for(sample, targets)
-        quote = target.text[: min(120, len(target.text))]
-        intent = sample.request_context.intent
-        fixtures[f"judge:intent:{sample.sample_id}"] = FakeFixture(
-            answer=json.dumps(
-                {
-                    "request_intent": intent.value,
-                    "risk_category": sample.request_context.risk_category,
-                    "request_summary": f"Offline fixture for {sample.sample_id}.",
-                    "response_summary": "Offline frozen target response.",
-                    "expanded_task_context": "Apply the configured rubric to frozen data.",
-                    "confidence": 0.9,
-                }
-            )
-        )
-        fixtures[f"judge:compliance:{sample.sample_id}"] = FakeFixture(
-            answer=_fake_verdict("compliant", "OFFLINE_FIXTURE", quote)
-        )
-        fixtures[f"judge:harm_enablement:{sample.sample_id}"] = FakeFixture(
-            answer=_fake_enablement(quote)
-        )
-        oversensitivity_label = (
-            "appropriate" if intent is RequestIntent.BENIGN else "not_applicable"
-        )
-        fixtures[f"judge:oversensitivity:{sample.sample_id}"] = FakeFixture(
-            answer=_fake_verdict(
-                oversensitivity_label,
-                "OFFLINE_FIXTURE",
-                quote,
-            )
-        )
-    provider = FakeProvider(
-        fixtures=fixtures,
-        capabilities=_TEXT_CAPABILITIES,
-        model_id="safejudge/fake-m3-judge",
-        artifact_store=FileArtifactStore(artifact_root.resolve()),
-    )
-    return await run_evaluation_batch(
-        samples_path=samples_path,
-        target_responses_path=target_responses_path,
-        output_path=output_path,
-        store_path=store_path,
-        checkpoint_path=checkpoint_path,
-        node_ledger_path=node_ledger_path,
-        context=context,
-        provider=provider,
-        max_concurrency=max_concurrency,
-        max_sample_concurrency=max_sample_concurrency,
-        limit=limit,
-        overwrite=overwrite,
-    )
+class EvaluationBatchFailure(ContractModel):
+    schema_version: Literal["1.0"] = "1.0"
+    sample_id: str
+    target_response_id: str
+    error_type: str
+    error_message: str = Field(min_length=1, max_length=2_000)
 
 
 async def run_evaluation_batch(
@@ -166,11 +120,14 @@ async def run_evaluation_batch(
     checkpoint_path: Path,
     node_ledger_path: Path,
     context: InvocationContext,
-    provider: ModelProvider,
+    jury_definition: JuryDefinition,
+    jury_providers: Mapping[JurySeat, ModelProvider],
     max_concurrency: int = 3,
     max_sample_concurrency: int = 1,
     max_retries: int = 1,
     parameters: Mapping[str, JsonValue] | None = None,
+    constitution_pack: ConstitutionPack | None = None,
+    grounding_pipeline: GroundingPipeline | None = None,
     limit: int | None = None,
     overwrite: bool = False,
 ) -> EvaluationBatchResult:
@@ -181,11 +138,13 @@ async def run_evaluation_batch(
     checkpoint_path = checkpoint_path.resolve()
     node_ledger_path = node_ledger_path.resolve()
     manifest_path = output_path.with_suffix(f"{output_path.suffix}.manifest.json")
+    failure_path = output_path.with_name(f"{output_path.stem}.failures.jsonl")
     _validate_paths(
         samples_path=samples_path,
         target_responses_path=target_responses_path,
         output_path=output_path,
         manifest_path=manifest_path,
+        failure_path=failure_path,
         overwrite=overwrite,
     )
     if max_concurrency < 1 or max_sample_concurrency < 1:
@@ -197,21 +156,28 @@ async def run_evaluation_batch(
     targets = _read_targets(target_responses_path)
     pairs = tuple((sample, _target_for(sample, targets)) for sample in samples)
     store = SQLiteModelStore(store_path)
-    judge_runner = JudgeRunner(
-        ModelInvoker(
-            provider=provider,
-            store=store,
-            policy=InvocationPolicy(
-                max_concurrency=max_concurrency,
-                max_retries=max_retries,
-                retry_backoff_seconds=0.5,
-            ),
-        )
+    jury = build_jury_runtime(
+        jury_definition,
+        providers=jury_providers,
+        store=store,
+        policy=InvocationPolicy(
+            max_concurrency=max_concurrency,
+            max_retries=max_retries,
+            retry_backoff_seconds=0.5,
+        ),
+    )
+    resolved_constitution = constitution_pack or ConstitutionRegistry.load(
+        Path("config/constitutions")
+    ).get("illegal-enablement-v1")
+    resolved_grounding = grounding_pipeline or GroundingPipeline(
+        mode=GroundingMode.BENCHMARK_ASSISTED
     )
     graph_context = EvaluationContext(
         invocation=context,
-        judge_runner=judge_runner,
-        judge_parameters=dict(parameters or {"temperature": 0, "max_tokens": 512}),
+        jury=jury,
+        constitution_pack=resolved_constitution,
+        grounding_pipeline=resolved_grounding,
+        judge_parameters=dict(parameters or {}),
         node_ledger=SQLiteNodeLedger(node_ledger_path),
     )
     sample_slots = asyncio.Semaphore(max_sample_concurrency)
@@ -252,14 +218,38 @@ async def run_evaluation_batch(
                 )
                 return EvaluationResult.model_validate(output["result"])
 
-        results = await asyncio.gather(*(evaluate_one(sample, target) for sample, target in pairs))
+        outcomes = await asyncio.gather(
+            *(evaluate_one(sample, target) for sample, target in pairs),
+            return_exceptions=True,
+        )
+
+    results: list[EvaluationResult] = []
+    failures: list[EvaluationBatchFailure] = []
+    for (sample, target), outcome in zip(pairs, outcomes, strict=True):
+        if isinstance(outcome, BaseException):
+            failures.append(
+                EvaluationBatchFailure(
+                    sample_id=sample.sample_id,
+                    target_response_id=target.response_id,
+                    error_type=type(outcome).__name__,
+                    error_message=(
+                        str(outcome)[:2_000] or "evaluation failed without a message"
+                    ),
+                )
+            )
+        else:
+            results.append(outcome)
 
     output_content = "".join(f"{item.model_dump_json()}\n" for item in results).encode()
     _atomic_write(output_path, output_content)
-    level_counts = Counter(str(item.aggregate.response_compliance_level.value) for item in results)
-    traces = [item.intent_analysis.trace for item in results]
-    traces.extend(verdict.trace for item in results for verdict in item.verdicts)
-    traces.extend(item.arbitration.trace for item in results if item.arbitration is not None)
+    failure_content = "".join(
+        f"{item.model_dump_json()}\n" for item in failures
+    ).encode()
+    _atomic_write(failure_path, failure_content)
+    level_counts = Counter(
+        _manifest_level(item.aggregate) for item in results
+    )
+    run_stats = store.run_stats(context=context, role=ModelRole.JUDGE)
     manifest = EvaluationBatchManifest(
         samples_input=_digest(samples_path),
         targets_input=_digest(target_responses_path),
@@ -267,15 +257,34 @@ async def run_evaluation_batch(
             name=output_path.name,
             sha256=hashlib.sha256(output_content).hexdigest(),
         ),
-        judge_provider=provider.provider_name,
-        judge_model=provider.model_id,
+        failures_output=EvaluationFileDigest(
+            name=failure_path.name,
+            sha256=hashlib.sha256(failure_content).hexdigest(),
+        ),
+        jury=jury.identity,
+        jury_hash=jury.identity.fingerprint,
+        constitution_id=resolved_constitution.constitution_id,
+        constitution_version=resolved_constitution.version,
+        constitution_hash=resolved_constitution.constitution_hash,
+        grounding_mode=resolved_grounding.mode,
+        grounding_pipeline_id=resolved_grounding.pipeline_id,
+        grounding_pipeline_version=resolved_grounding.pipeline_version,
+        grounding_pipeline_hash=resolved_grounding.fingerprint,
         experiment_id=context.experiment_id,
         run_id=context.run_id,
+        input_sample_count=len(pairs),
         sample_count=len(results),
+        failure_count=len(failures),
+        judge_failure_count=sum(len(item.judge_failures) for item in results),
         arbitration_count=sum(item.arbitration is not None for item in results),
-        cache_hit_count=sum(trace.cache_hit for trace in traces),
-        cache_miss_count=sum(not trace.cache_hit for trace in traces),
-        billed_cost_usd=sum((trace.billed_cost_usd for trace in traces), Decimal("0")),
+        logical_call_count=run_stats.logical_call_count,
+        provider_attempt_count=run_stats.provider_attempt_count,
+        contract_repair_call_count=run_stats.contract_repair_call_count,
+        successful_call_count=run_stats.successful_call_count,
+        failed_call_count=run_stats.failed_call_count,
+        cache_hit_count=run_stats.cache_hit_count,
+        cache_miss_count=run_stats.cache_miss_count,
+        billed_cost_usd=run_stats.billed_cost_usd,
         compliance_level_counts=dict(sorted(level_counts.items())),
     )
     _atomic_write(
@@ -285,6 +294,7 @@ async def run_evaluation_batch(
     return EvaluationBatchResult(
         output_path=output_path,
         manifest_path=manifest_path,
+        failure_path=failure_path,
         store_path=store_path,
         checkpoint_path=checkpoint_path,
         node_ledger_path=node_ledger_path,
@@ -353,41 +363,19 @@ def _validate_paths(
     target_responses_path: Path,
     output_path: Path,
     manifest_path: Path,
+    failure_path: Path,
     overwrite: bool,
 ) -> None:
     if not samples_path.is_file():
         raise ConfigurationError(f"canonical input JSONL does not exist: {samples_path}")
     if not target_responses_path.is_file():
         raise ConfigurationError(f"target response JSONL does not exist: {target_responses_path}")
-    if not overwrite and (output_path.exists() or manifest_path.exists()):
+    if not overwrite and (
+        output_path.exists() or manifest_path.exists() or failure_path.exists()
+    ):
         raise ConfigurationError(
             f"output or manifest already exists: {output_path}; pass --overwrite to replace it"
         )
-
-
-def _fake_verdict(label: str, reason: str, quote: str) -> str:
-    return json.dumps(
-        {
-            "label": label,
-            "confidence": 0.9,
-            "reason_codes": [reason],
-            "evidence": [{"source": "target_response", "text": quote}],
-        }
-    )
-
-
-def _fake_enablement(quote: str) -> str:
-    return json.dumps(
-        {
-            "specificity": 0,
-            "completeness": 0,
-            "feasibility": 0,
-            "evasion_help": 0,
-            "confidence": 0.9,
-            "reason_codes": ["OFFLINE_FIXTURE"],
-            "evidence": [{"source": "target_response", "text": quote}],
-        }
-    )
 
 
 def _digest(path: Path) -> EvaluationFileDigest:
@@ -395,6 +383,11 @@ def _digest(path: Path) -> EvaluationFileDigest:
         name=path.name,
         sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
     )
+
+
+def _manifest_level(aggregate: AggregateDecision) -> str:
+    level = aggregate.response_compliance_level
+    return aggregate.decision_status.value if level is None else str(level.value)
 
 
 def _atomic_write(path: Path, content: bytes) -> None:

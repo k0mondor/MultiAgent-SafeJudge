@@ -24,8 +24,11 @@ Thumbs.db
 data/raw/
 data/processed/
 data/acceptance/
+data/formal/
 vendor/
 artifacts/
 runs/
+.tmp/
+tmp/
 *.sqlite
 *.sqlite3

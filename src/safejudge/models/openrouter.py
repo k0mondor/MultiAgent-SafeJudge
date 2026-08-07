@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import base64
 from collections.abc import Mapping
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from time import monotonic
-from typing import Any, ClassVar
+from typing import Any
 
 import httpx
 from pydantic import Field, SecretStr
@@ -18,22 +17,25 @@ from pydantic_settings import (
 )
 
 from safejudge.contracts.artifact import ArtifactRef
-from safejudge.contracts.dataset import MediaType
 from safejudge.contracts.evaluation import ModelCost, PriceSnapshot, TokenUsage
 from safejudge.contracts.model import (
     ModelCapabilities,
-    ModelMediaPart,
     ModelRequest,
     ModelResponse,
-    ModelTextPart,
 )
 from safejudge.core.errors import (
     ArtifactError,
-    ConfigurationError,
     ProviderError,
     ProviderErrorKind,
 )
 from safejudge.models.artifacts import ArtifactStore
+from safejudge.models.openai_compat import (
+    build_chat_payload,
+    decode_json_object,
+    error_kind_from_status,
+    parse_chat_completion,
+    retry_after,
+)
 
 
 class OpenRouterSettings(BaseSettings):
@@ -68,10 +70,7 @@ class OpenRouterSettings(BaseSettings):
 
 
 class OpenRouterProvider:
-    _RESERVED_PARAMETERS: ClassVar[frozenset[str]] = frozenset(
-        {"model", "messages", "stream"}
-    )
-    _ERROR_KIND_BY_TYPE: ClassVar[Mapping[str, ProviderErrorKind]] = {
+    _ERROR_KIND_BY_TYPE: Mapping[str, ProviderErrorKind] = {
         "authentication": ProviderErrorKind.AUTHENTICATION,
         "payment_required": ProviderErrorKind.INSUFFICIENT_CREDITS,
         "rate_limit_exceeded": ProviderErrorKind.RATE_LIMIT,
@@ -184,66 +183,14 @@ class OpenRouterProvider:
             ) from error
 
     def _build_payload(self, request: ModelRequest) -> dict[str, Any]:
-        reserved = sorted(self._RESERVED_PARAMETERS.intersection(request.parameters))
-        if reserved:
-            raise ConfigurationError(
-                f"model parameters cannot override reserved OpenRouter fields: {reserved}"
-            )
-        content: list[dict[str, Any]] = []
-        for part in request.parts:
-            if isinstance(part, ModelTextPart):
-                content.append({"type": "text", "text": part.text})
-            elif isinstance(part, ModelMediaPart):
-                content.append(self._media_content(part))
-        return {
-            **request.parameters,
-            "model": self.model_id,
-            "messages": [{"role": "user", "content": content}],
-            "stream": False,
-        }
-
-    def _media_content(self, part: ModelMediaPart) -> dict[str, Any]:
-        media = part.media
-        if media.media_type is MediaType.IMAGE:
-            url = self._data_or_url(media.uri, media.mime_type)
-            return {"type": "image_url", "image_url": {"url": url}}
-        if media.media_type is MediaType.VIDEO:
-            url = self._data_or_url(media.uri, media.mime_type)
-            return {"type": "video_url", "video_url": {"url": url}}
-        if media.uri.startswith(("https://", "http://", "data:")):
-            raise ConfigurationError("OpenRouter audio input must be a validated local file")
-        audio_path = self._local_path(media.uri)
-        encoded = base64.b64encode(audio_path.read_bytes()).decode("ascii")
-        audio_format = _audio_format(media.mime_type, audio_path.suffix)
-        return {"type": "input_audio", "input_audio": {"data": encoded, "format": audio_format}}
-
-    def _data_or_url(self, uri: str, mime_type: str) -> str:
-        if uri.startswith(("https://", "http://", "data:")):
-            return uri
-        path = self._local_path(uri)
-        encoded = base64.b64encode(path.read_bytes()).decode("ascii")
-        return f"data:{mime_type};base64,{encoded}"
-
-    def _local_path(self, uri: str) -> Path:
-        path = Path(uri)
-        if path.is_absolute():
-            raise ConfigurationError(f"absolute local media paths are not allowed: {uri}")
-        if self._media_root is None:
-            raise ConfigurationError("media_root is required for local media inputs")
-        root = self._media_root.resolve()
-        physical = (root / path).resolve()
-        try:
-            physical.relative_to(root)
-        except ValueError as error:
-            raise ConfigurationError(f"local media path escapes media_root: {uri}") from error
-        if not physical.is_file():
-            raise ConfigurationError(f"local media file does not exist: {uri}")
-        size_bytes = physical.stat().st_size
-        if size_bytes > self.settings.max_local_media_bytes:
-            raise ConfigurationError(
-                f"local media file exceeds {self.settings.max_local_media_bytes} bytes: {uri}"
-            )
-        return physical
+        return build_chat_payload(
+            request,
+            model_id=self.model_id,
+            media_root=self._media_root,
+            max_local_media_bytes=self.settings.max_local_media_bytes,
+            reserved_fields_label="OpenRouter",
+            audio_label="OpenRouter",
+        )
 
     def _decode_response(
         self,
@@ -251,24 +198,11 @@ class OpenRouterProvider:
         *,
         raw_artifact: ArtifactRef,
     ) -> dict[str, Any]:
-        try:
-            data = response.json()
-        except ValueError as error:
-            raise ProviderError(
-                "OpenRouter returned non-JSON content",
-                retryable=response.status_code >= 500,
-                kind=ProviderErrorKind.MALFORMED_RESPONSE,
-                status_code=response.status_code,
-                raw_artifact=raw_artifact,
-            ) from error
-        if not isinstance(data, dict):
-            raise ProviderError(
-                "OpenRouter returned a non-object JSON response",
-                retryable=False,
-                kind=ProviderErrorKind.MALFORMED_RESPONSE,
-                status_code=response.status_code,
-                raw_artifact=raw_artifact,
-            )
+        data = decode_json_object(
+            response,
+            provider_label="OpenRouter",
+            raw_artifact=raw_artifact,
+        )
         if response.is_error or "error" in data:
             raise self._classified_error(response, data, raw_artifact=raw_artifact)
         return data
@@ -288,22 +222,34 @@ class OpenRouterProvider:
         if not isinstance(error_type, str):
             top_error_type = data.get("error_type")
             error_type = top_error_type if isinstance(top_error_type, str) else ""
-        kind = self._ERROR_KIND_BY_TYPE.get(error_type, _kind_from_status(response.status_code))
+        message = error_data.get("message")
+        if not isinstance(message, str):
+            message = f"OpenRouter request failed with HTTP {response.status_code}"
+        normalized_message = message.casefold()
+        if (
+            "key limit exceeded" in normalized_message
+            or "insufficient credits" in normalized_message
+        ):
+            # OpenRouter may return account/key spending-limit exhaustion as HTTP
+            # 403 without a specific error_type. It is a billing/quota failure, not
+            # a provider content-policy refusal.
+            kind = ProviderErrorKind.INSUFFICIENT_CREDITS
+        else:
+            kind = self._ERROR_KIND_BY_TYPE.get(
+                error_type, error_kind_from_status(response.status_code)
+            )
         retryable = kind in {
             ProviderErrorKind.TIMEOUT,
             ProviderErrorKind.RATE_LIMIT,
             ProviderErrorKind.UNAVAILABLE,
         }
-        message = error_data.get("message")
-        if not isinstance(message, str):
-            message = f"OpenRouter request failed with HTTP {response.status_code}"
-        retry_after = _retry_after(response.headers.get("Retry-After"))
+        retry_delay = retry_after(response.headers.get("Retry-After"))
         return ProviderError(
             message,
             retryable=retryable,
             kind=kind,
             status_code=response.status_code,
-            retry_after_seconds=retry_after,
+            retry_after_seconds=retry_delay,
             raw_artifact=raw_artifact,
         )
 
@@ -316,37 +262,22 @@ class OpenRouterProvider:
         latency_ms: int,
         raw_artifact: ArtifactRef,
     ) -> ModelResponse:
-        try:
-            choice = data["choices"][0]
-            answer = choice["message"]["content"]
-            response_id = str(data["id"])
-        except (KeyError, IndexError, TypeError) as error:
-            raise ProviderError(
-                "OpenRouter response is missing a completion answer",
-                retryable=False,
-                kind=ProviderErrorKind.MALFORMED_RESPONSE,
-                raw_artifact=raw_artifact,
-            ) from error
-        if not isinstance(answer, str) or not answer.strip():
-            raise ProviderError(
-                "OpenRouter response contains an empty completion answer",
-                retryable=True,
-                kind=ProviderErrorKind.MALFORMED_RESPONSE,
-                raw_artifact=raw_artifact,
-            )
-        usage = _token_usage(data.get("usage"))
-        cost = self._model_cost(data.get("usage"), usage)
-        returned_model = data.get("model")
+        parsed = parse_chat_completion(
+            data,
+            provider_label="OpenRouter",
+            raw_artifact=raw_artifact,
+        )
+        cost = self._model_cost(parsed.raw_usage, parsed.token_usage)
         return ModelResponse(
-            response_id=response_id,
+            response_id=parsed.response_id,
             request_hash=request_hash,
             role=request.role,
             provider=self.provider_name,
             model=self.model_id,
-            model_version=returned_model if isinstance(returned_model, str) else None,
-            answer=answer,
-            finish_reason=choice.get("finish_reason"),
-            token_usage=usage,
+            model_version=parsed.model_version,
+            answer=parsed.answer,
+            finish_reason=parsed.finish_reason,
+            token_usage=parsed.token_usage,
             latency_ms=latency_ms,
             cost=cost,
             raw_artifact=raw_artifact,
@@ -367,53 +298,3 @@ class OpenRouterProvider:
             estimated_usd=estimated,
             actual_usd=actual,
         )
-
-
-def _token_usage(raw_usage: Any) -> TokenUsage | None:
-    if not isinstance(raw_usage, dict):
-        return None
-    prompt = raw_usage.get("prompt_tokens")
-    completion = raw_usage.get("completion_tokens")
-    if not isinstance(prompt, int) or not isinstance(completion, int):
-        return None
-    return TokenUsage(input_tokens=prompt, output_tokens=completion)
-
-
-def _kind_from_status(status: int) -> ProviderErrorKind:
-    if status in {408, 504}:
-        return ProviderErrorKind.TIMEOUT
-    if status == 429:
-        return ProviderErrorKind.RATE_LIMIT
-    if status >= 500:
-        return ProviderErrorKind.UNAVAILABLE
-    if status == 401:
-        return ProviderErrorKind.AUTHENTICATION
-    if status == 402:
-        return ProviderErrorKind.INSUFFICIENT_CREDITS
-    if status == 403:
-        return ProviderErrorKind.CONTENT_POLICY
-    if 400 <= status < 500:
-        return ProviderErrorKind.INVALID_REQUEST
-    return ProviderErrorKind.UNKNOWN
-
-
-def _retry_after(value: str | None) -> float | None:
-    if value is None:
-        return None
-    try:
-        parsed = float(value)
-    except ValueError:
-        return None
-    return max(0, parsed)
-
-
-def _audio_format(mime_type: str, suffix: str) -> str:
-    by_mime = {
-        "audio/wav": "wav",
-        "audio/x-wav": "wav",
-        "audio/mpeg": "mp3",
-        "audio/mp3": "mp3",
-        "audio/ogg": "ogg",
-        "audio/flac": "flac",
-    }
-    return by_mime.get(mime_type, suffix.removeprefix(".").lower() or "wav")

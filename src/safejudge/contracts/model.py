@@ -21,6 +21,7 @@ class ModelRole(StrEnum):
 
     TARGET = "target"
     JUDGE = "judge"
+    GROUNDING = "grounding"
 
 
 class InvocationContext(ContractModel):

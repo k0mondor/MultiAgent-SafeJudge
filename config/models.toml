@@ -1,0 +1,481 @@
+# Profiles remain candidates until a real end-to-end report is reviewed.
+# Secrets and endpoint URLs remain in .env; this registry contains no credentials.
+
+[[models]]
+profile_id = "openrouter-free-target-v1"
+profile_version = "1"
+provider = "openrouter"
+model_id = "openrouter/free"
+roles = ["target"]
+structured_output_mode = "none"
+qualification_status = "candidate"
+
+[[models.retry_parameters]]
+max_tokens = 1024
+
+[models.default_parameters]
+temperature = 0
+max_tokens = 512
+
+[[models]]
+profile_id = "gemma-4-26b-free-target-v1"
+profile_version = "1"
+provider = "openrouter"
+model_id = "google/gemma-4-26b-a4b-it:free"
+roles = ["target"]
+structured_output_mode = "none"
+qualification_status = "approved"
+qualification_report = "runs/qualification/gemma4-free-pair-20260806/qualification-report.json"
+
+[[models.retry_parameters]]
+max_tokens = 1536
+
+[[models.retry_parameters]]
+max_tokens = 4096
+
+[[models.retry_parameters]]
+max_tokens = 8192
+
+[models.default_parameters]
+temperature = 0
+max_tokens = 512
+
+[[models]]
+profile_id = "openai-gpt-4.1-mini-target-v1"
+profile_version = "1"
+provider = "openrouter"
+model_id = "openai/gpt-4.1-mini"
+roles = ["target"]
+structured_output_mode = "none"
+qualification_status = "candidate"
+
+[[models.retry_parameters]]
+max_tokens = 1536
+
+[models.default_parameters]
+temperature = 0
+max_tokens = 512
+
+[[models]]
+profile_id = "gemini-2.5-flash-target-v1"
+profile_version = "1"
+provider = "openrouter"
+model_id = "google/gemini-2.5-flash"
+roles = ["target"]
+structured_output_mode = "none"
+qualification_status = "candidate"
+
+[[models.retry_parameters]]
+max_tokens = 1536
+
+[models.default_parameters]
+temperature = 0
+max_tokens = 512
+
+[[models]]
+profile_id = "openai-gpt-4.1-mini-judge-v1"
+profile_version = "1"
+provider = "openrouter"
+model_id = "openai/gpt-4.1-mini"
+roles = ["judge"]
+structured_output_mode = "native_json_schema"
+qualification_status = "candidate"
+max_contract_retries = 1
+openrouter_require_parameters = true
+openrouter_response_healing = true
+
+[[models.retry_parameters]]
+max_tokens = 3072
+
+[models.default_parameters]
+temperature = 0
+max_tokens = 1536
+
+[[models]]
+profile_id = "gemma-4-26b-free-grounding-v1"
+profile_version = "1"
+provider = "openrouter"
+model_id = "google/gemma-4-26b-a4b-it:free"
+roles = ["grounding"]
+structured_output_mode = "native_json_schema"
+qualification_status = "candidate"
+max_contract_retries = 0
+openrouter_require_parameters = true
+openrouter_response_healing = false
+
+[models.default_parameters]
+temperature = 0
+max_tokens = 1024
+
+[[models]]
+profile_id = "gemini-2.5-flash-grounding-v1"
+profile_version = "1"
+provider = "openrouter"
+model_id = "google/gemini-2.5-flash"
+roles = ["grounding"]
+structured_output_mode = "native_json_schema"
+qualification_status = "candidate"
+max_contract_retries = 0
+openrouter_require_parameters = true
+openrouter_response_healing = false
+
+[models.default_parameters]
+temperature = 0
+max_tokens = 1024
+
+# Formal cross-provider candidates. Pool membership means the profile is callable
+# and traceable; it does not imply semantic approval.
+
+[[models]]
+profile_id = "glm-4.6v-target-v1"
+profile_version = "1"
+provider = "openrouter"
+model_id = "z-ai/glm-4.6v"
+roles = ["target"]
+structured_output_mode = "none"
+qualification_status = "candidate"
+
+[[models.retry_parameters]]
+max_tokens = 1536
+
+[[models.retry_parameters]]
+max_tokens = 4096
+
+[[models.retry_parameters]]
+max_tokens = 8192
+
+[models.default_parameters]
+temperature = 0
+max_tokens = 512
+
+[[models]]
+profile_id = "glm-4.6v-target-v2"
+profile_version = "2"
+provider = "openrouter"
+model_id = "z-ai/glm-4.6v"
+roles = ["target"]
+structured_output_mode = "none"
+qualification_status = "candidate"
+
+[[models.retry_parameters]]
+max_tokens = 8192
+
+[models.default_parameters]
+temperature = 0
+max_tokens = 4096
+
+[[models]]
+profile_id = "glm-4.6v-grounding-v1"
+profile_version = "1"
+provider = "openrouter"
+model_id = "z-ai/glm-4.6v"
+roles = ["grounding"]
+structured_output_mode = "native_json_schema"
+qualification_status = "candidate"
+max_contract_retries = 0
+openrouter_require_parameters = true
+openrouter_response_healing = false
+
+[models.default_parameters]
+temperature = 0
+max_tokens = 1024
+
+[[models]]
+profile_id = "glm-4.6v-grounding-v2"
+profile_version = "2"
+provider = "openrouter"
+model_id = "z-ai/glm-4.6v"
+roles = ["grounding"]
+structured_output_mode = "native_json_schema"
+qualification_status = "candidate"
+max_contract_retries = 1
+openrouter_require_parameters = true
+openrouter_response_healing = true
+
+[[models.retry_parameters]]
+max_tokens = 4096
+
+[models.default_parameters]
+temperature = 0
+max_tokens = 2048
+
+[[models]]
+profile_id = "grok-4.3-target-v1"
+profile_version = "1"
+provider = "openrouter"
+model_id = "x-ai/grok-4.3"
+roles = ["target"]
+structured_output_mode = "none"
+qualification_status = "candidate"
+
+[[models.retry_parameters]]
+max_tokens = 1536
+
+[models.default_parameters]
+temperature = 0
+max_tokens = 512
+
+[[models]]
+profile_id = "kimi-k2.6-target-v1"
+profile_version = "1"
+provider = "openrouter"
+model_id = "moonshotai/kimi-k2.6"
+roles = ["target"]
+structured_output_mode = "none"
+qualification_status = "candidate"
+
+[[models.retry_parameters]]
+max_tokens = 1536
+
+[[models.retry_parameters]]
+max_tokens = 4096
+
+[[models.retry_parameters]]
+max_tokens = 8192
+
+[models.default_parameters]
+temperature = 0
+max_tokens = 512
+
+[[models]]
+profile_id = "nvidia-nemotron-omni-free-target-v1"
+profile_version = "1"
+provider = "openrouter"
+model_id = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
+roles = ["target"]
+structured_output_mode = "none"
+qualification_status = "candidate"
+
+[[models.retry_parameters]]
+max_tokens = 2048
+
+[models.default_parameters]
+temperature = 0
+max_tokens = 768
+
+[[models]]
+profile_id = "seed-2.0-mini-target-v1"
+profile_version = "1"
+provider = "openrouter"
+model_id = "bytedance-seed/seed-2.0-mini"
+roles = ["target"]
+structured_output_mode = "none"
+qualification_status = "candidate"
+
+[[models.retry_parameters]]
+max_tokens = 1536
+
+[[models.retry_parameters]]
+max_tokens = 4096
+
+[[models.retry_parameters]]
+max_tokens = 8192
+
+[models.default_parameters]
+temperature = 0
+max_tokens = 512
+
+[[models]]
+profile_id = "glm-5.2-judge-v1"
+profile_version = "1"
+provider = "openrouter"
+model_id = "z-ai/glm-5.2"
+roles = ["judge"]
+structured_output_mode = "native_json_schema"
+qualification_status = "candidate"
+max_contract_retries = 1
+openrouter_require_parameters = true
+openrouter_response_healing = true
+
+[[models.retry_parameters]]
+max_tokens = 4096
+
+[models.default_parameters]
+temperature = 0
+max_tokens = 2048
+
+[[models]]
+profile_id = "grok-4.3-judge-v1"
+profile_version = "1"
+provider = "openrouter"
+model_id = "x-ai/grok-4.3"
+roles = ["judge"]
+structured_output_mode = "native_json_schema"
+qualification_status = "candidate"
+max_contract_retries = 1
+openrouter_require_parameters = true
+openrouter_response_healing = true
+
+[[models.retry_parameters]]
+max_tokens = 4096
+
+[models.default_parameters]
+temperature = 0
+max_tokens = 2048
+
+[[models]]
+profile_id = "kimi-k2.6-judge-v1"
+profile_version = "1"
+provider = "openrouter"
+model_id = "moonshotai/kimi-k2.6"
+roles = ["judge"]
+structured_output_mode = "native_json_schema"
+qualification_status = "candidate"
+max_contract_retries = 1
+openrouter_require_parameters = true
+openrouter_response_healing = true
+
+[[models.retry_parameters]]
+max_tokens = 4096
+
+[models.default_parameters]
+temperature = 0
+max_tokens = 2048
+
+[[models]]
+profile_id = "deepseek-v4-flash-0731-judge-v1"
+profile_version = "1"
+provider = "openrouter"
+model_id = "deepseek/deepseek-v4-flash-0731"
+roles = ["judge"]
+structured_output_mode = "native_json_schema"
+qualification_status = "candidate"
+max_contract_retries = 1
+openrouter_require_parameters = true
+openrouter_response_healing = true
+
+[[models.retry_parameters]]
+max_tokens = 4096
+
+[models.default_parameters]
+temperature = 0
+max_tokens = 2048
+
+[[models]]
+profile_id = "kimi-k2.6-no-reasoning-judge-v1"
+profile_version = "1"
+provider = "openrouter"
+model_id = "moonshotai/kimi-k2.6"
+roles = ["judge"]
+structured_output_mode = "native_json_schema"
+qualification_status = "candidate"
+max_contract_retries = 1
+openrouter_require_parameters = true
+openrouter_response_healing = true
+
+[[models.retry_parameters]]
+max_tokens = 3072
+reasoning = { enabled = false }
+
+[models.default_parameters]
+temperature = 0
+max_tokens = 1536
+reasoning = { enabled = false }
+
+[[models]]
+profile_id = "nvidia-nemotron-super-judge-v1"
+profile_version = "1"
+provider = "openrouter"
+model_id = "nvidia/nemotron-3-super-120b-a12b"
+roles = ["judge"]
+structured_output_mode = "native_json_schema"
+qualification_status = "candidate"
+max_contract_retries = 1
+openrouter_require_parameters = true
+openrouter_response_healing = true
+
+[[models.retry_parameters]]
+max_tokens = 4096
+
+[models.default_parameters]
+temperature = 0
+max_tokens = 2048
+
+[[models]]
+profile_id = "seed-2.0-mini-judge-v1"
+profile_version = "1"
+provider = "openrouter"
+model_id = "bytedance-seed/seed-2.0-mini"
+roles = ["judge"]
+structured_output_mode = "native_json_schema"
+qualification_status = "candidate"
+max_contract_retries = 1
+openrouter_require_parameters = true
+openrouter_response_healing = true
+
+[[models.retry_parameters]]
+max_tokens = 4096
+
+[models.default_parameters]
+temperature = 0
+max_tokens = 2048
+
+[[models]]
+profile_id = "gemma-4-26b-free-judge-v1"
+profile_version = "1"
+provider = "openrouter"
+model_id = "google/gemma-4-26b-a4b-it:free"
+roles = ["judge"]
+structured_output_mode = "native_json_schema"
+qualification_status = "approved"
+qualification_report = "runs/qualification/gemma4-free-pair-20260806/qualification-report.json"
+max_contract_retries = 1
+openrouter_require_parameters = true
+openrouter_response_healing = false
+
+[models.default_parameters]
+temperature = 0
+max_tokens = 2048
+
+[[models]]
+profile_id = "gemini-2.5-flash-judge-v1"
+profile_version = "1"
+provider = "openrouter"
+model_id = "google/gemini-2.5-flash"
+roles = ["judge"]
+structured_output_mode = "native_json_schema"
+qualification_status = "candidate"
+max_contract_retries = 1
+openrouter_require_parameters = true
+openrouter_response_healing = false
+
+[[models.retry_parameters]]
+max_tokens = 3072
+
+[models.default_parameters]
+temperature = 0
+max_tokens = 1536
+
+[[models]]
+profile_id = "local-judge-v1"
+profile_version = "1"
+provider = "local-openai"
+model_id = "replace-with-local-model-id"
+roles = ["judge"]
+structured_output_mode = "native_json_schema"
+qualification_status = "candidate"
+max_contract_retries = 1
+
+[[models.retry_parameters]]
+max_tokens = 3072
+
+[models.default_parameters]
+temperature = 0
+max_tokens = 1536
+
+[[models]]
+profile_id = "qwen2.5-1.5b-local-judge-v1"
+profile_version = "1"
+provider = "local-openai"
+model_id = "safejudge-judge"
+roles = ["judge"]
+structured_output_mode = "native_json_schema"
+qualification_status = "candidate"
+max_contract_retries = 1
+
+[[models.retry_parameters]]
+max_tokens = 2048
+
+[models.default_parameters]
+temperature = 0
+max_tokens = 1536
