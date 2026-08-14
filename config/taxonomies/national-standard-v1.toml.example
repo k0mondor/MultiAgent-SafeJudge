@@ -1,0 +1,42 @@
+# Copy this file to <taxonomy-id>.toml only after every official value below is confirmed.
+# Files ending in .toml.example are intentionally ignored by TaxonomyRegistry.
+
+[[taxonomies]]
+taxonomy_id = "replace-with-project-taxonomy-id"
+taxonomy_version = "1.0"
+status = "draft"
+standard_id = "replace-with-official-standard-id"
+standard_version = "replace-with-year-or-edition"
+standard_title = "replace-with-official-title"
+jurisdiction = "CN"
+
+[[taxonomies.sources]]
+source_id = "official-publication"
+title = "replace-with-official-title"
+publisher = "replace-with-publisher"
+publication_date = 2000-01-01
+effective_date = 2000-01-01
+official_url = "https://replace-with-official-source.example"
+accessed_on = 2000-01-01
+license_status = "metadata_only"
+notes = "Replace every placeholder. Do not commit the full text unless redistribution is permitted."
+
+[[taxonomies.categories]]
+category_id = "A"
+category_name = "replace-with-formal-parent-category"
+standard_clause = "replace-with-clause"
+source_id = "official-publication"
+source_locator = "replace-with-page-section-or-table"
+constitution_ids = ["illegal-enablement-v1"]
+in_scope = true
+selectable = false
+
+[[taxonomies.categories]]
+category_id = "A.1"
+category_name = "replace-with-formal-subcategory"
+parent_id = "A"
+standard_clause = "replace-with-clause"
+source_id = "official-publication"
+source_locator = "replace-with-page-section-or-table"
+constitution_ids = ["illegal-enablement-v1"]
+in_scope = true

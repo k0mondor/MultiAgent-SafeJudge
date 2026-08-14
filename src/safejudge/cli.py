@@ -12,6 +12,7 @@ from typing import cast
 from pydantic import ValidationError
 
 from safejudge import __version__
+from safejudge.constitution import ConstitutionRegistry
 from safejudge.contracts.dataset import DatasetSplit, MediaType
 from safejudge.contracts.jury import (
     JuryDefinition,
@@ -49,6 +50,7 @@ from safejudge.models.local_openai import (
 )
 from safejudge.models.openrouter import OpenRouterProvider, OpenRouterSettings
 from safejudge.models.profiles import ModelProfile, ModelRegistry
+from safejudge.taxonomy import TaxonomyRegistry
 from safejudge.workflows.batch import run_evaluation_batch
 
 _TARGET_CAPABILITIES = ("text", "text+image", "text+audio", "text+video")
@@ -180,6 +182,24 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path("config/models.toml"),
     )
     evaluate_run_parser.add_argument("--allow-unqualified-model", action="store_true")
+    evaluate_run_parser.add_argument(
+        "--taxonomy",
+        help=(
+            "taxonomy ID to enable multi-label Category Router "
+            "(for example gb-t-45654-2025-safejudge-v1)"
+        ),
+    )
+    evaluate_run_parser.add_argument("--taxonomy-version")
+    evaluate_run_parser.add_argument(
+        "--taxonomy-registry",
+        type=Path,
+        default=Path("config/taxonomies"),
+    )
+    evaluate_run_parser.add_argument(
+        "--constitution-registry",
+        type=Path,
+        default=Path("config/constitutions"),
+    )
     evaluate_run_parser.add_argument(
         "--grounding-sidecar",
         type=Path,
@@ -399,6 +419,20 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "overwrite": args.overwrite,
                 "grounding_pipeline": _grounding_pipeline(args),
             }
+            if args.taxonomy:
+                constitution_registry = ConstitutionRegistry.load(
+                    args.constitution_registry
+                )
+                taxonomy_registry = TaxonomyRegistry.load(args.taxonomy_registry)
+                taxonomy_pack = taxonomy_registry.get(
+                    args.taxonomy,
+                    version=args.taxonomy_version,
+                )
+                taxonomy_registry.validate_constitutions(constitution_registry)
+                common.update(
+                    taxonomy_pack=taxonomy_pack,
+                    constitution_registry=constitution_registry,
+                )
             definition = JuryPlan.load(args.jury_plan).resolve(
                 ModelRegistry.load(args.model_registry),
                 allow_unqualified=args.allow_unqualified_model,
@@ -446,6 +480,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "cache_misses": evaluation_result.manifest.cache_miss_count,
                     "billed_cost_usd": str(evaluation_result.manifest.billed_cost_usd),
                     "levels": evaluation_result.manifest.compliance_level_counts,
+                    "taxonomy_id": evaluation_result.manifest.taxonomy_id,
+                    "standard_id": evaluation_result.manifest.standard_id,
                 },
                 ensure_ascii=False,
                 indent=2,

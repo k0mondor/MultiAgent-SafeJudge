@@ -242,6 +242,22 @@ class IntentAnalysis(ContractModel):
         return self
 
 
+class CategoryAnalysis(ContractModel):
+    """Multi-label taxonomy classification of the persisted target response."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    category_ids: tuple[str, ...] = Field(default=(), max_length=64)
+    confidence: float = Field(ge=0, le=1)
+    prompt_version: NonEmptyString
+    trace: JudgeCallTrace
+
+    @model_validator(mode="after")
+    def category_ids_are_unique(self) -> CategoryAnalysis:
+        if len(set(self.category_ids)) != len(self.category_ids):
+            raise ValueError("category analysis IDs must be unique")
+        return self
+
+
 class EnablementScores(ContractModel):
     """Fine-grained response enablement facets; these describe output, not request risk."""
 
@@ -300,6 +316,12 @@ class JudgeVerdict(ContractModel):
     enablement_scores: EnablementScores | None = None
     prompt_version: NonEmptyString
     trace: JudgeCallTrace
+    category_id: str | None = None
+    constitution_id: str | None = None
+    compiled_constitution_hash: str | None = Field(
+        default=None,
+        pattern=r"^[a-f0-9]{64}$",
+    )
 
     @model_validator(mode="after")
     def label_matches_axis(self) -> JudgeVerdict:
@@ -346,6 +368,8 @@ class JudgeExecutionFailure(ContractModel):
     provider_response_id: str | None = None
     raw_artifact: ArtifactRef | None = None
     contract_retries_exhausted: bool = False
+    category_id: str | None = None
+    constitution_id: str | None = None
 
 
 class ArbitrationDecision(ContractModel):
@@ -423,6 +447,40 @@ class AggregateDecision(ContractModel):
         return self
 
 
+class CategoryEvaluationResult(ContractModel):
+    """Independent panel and deterministic decision for one routed leaf category."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    category_id: NonEmptyString
+    category_name: NonEmptyString
+    parent_id: str | None = None
+    standard_clause: NonEmptyString
+    constitution_id: NonEmptyString
+    verdicts: tuple[JudgeVerdict, ...] = Field(max_length=3)
+    judge_failures: tuple[JudgeExecutionFailure, ...] = Field(default=(), max_length=3)
+    aggregate: AggregateDecision
+
+    @model_validator(mode="after")
+    def panel_is_scoped_to_category(self) -> CategoryEvaluationResult:
+        axes = {verdict.axis for verdict in self.verdicts}
+        failed_axes = {failure.axis for failure in self.judge_failures}
+        expected = {JudgeAxis.COMPLIANCE, JudgeAxis.HARM_ENABLEMENT}
+        if any(verdict.category_id != self.category_id for verdict in self.verdicts):
+            raise ValueError("category verdict belongs to a different category")
+        if any(
+            verdict.constitution_id != self.constitution_id
+            for verdict in self.verdicts
+        ):
+            raise ValueError("category verdict used a different Constitution pack")
+        if axes.intersection(failed_axes):
+            raise ValueError("category axis cannot both succeed and fail")
+        if axes.union(failed_axes) != expected:
+            raise ValueError("category panel must cover compliance and harm_enablement")
+        if failed_axes and self.aggregate.decision_status is not DecisionStatus.REVIEW_REQUIRED:
+            raise ValueError("category judge failure requires review")
+        return self
+
+
 class EvaluationSpec(ContractModel):
     """Versioned semantic identity for one complete evaluation."""
 
@@ -440,6 +498,10 @@ class EvaluationSpec(ContractModel):
     constitution_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
     constitution_router_version: NonEmptyString
     scope_id: NonEmptyString
+    taxonomy_id: str | None = None
+    taxonomy_version: str | None = None
+    taxonomy_hash: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    standard_id: str | None = None
     grounding_mode: NonEmptyString
     grounding_pipeline_id: NonEmptyString
     grounding_pipeline_version: NonEmptyString
@@ -457,7 +519,25 @@ class EvaluationSpec(ContractModel):
     def evaluation_key_matches_fields(self) -> EvaluationSpec:
         if self.jury_hash != self.jury.fingerprint:
             raise ValueError("jury_hash does not match Jury identity")
+        taxonomy_fields = (
+            self.taxonomy_id,
+            self.taxonomy_version,
+            self.taxonomy_hash,
+            self.standard_id,
+        )
+        if any(value is not None for value in taxonomy_fields) and any(
+            value is None for value in taxonomy_fields
+        ):
+            raise ValueError("taxonomy identity fields must be provided together")
         payload = self.model_dump(mode="json", exclude={"evaluation_key"})
+        if self.taxonomy_id is None:
+            for field_name in (
+                "taxonomy_id",
+                "taxonomy_version",
+                "taxonomy_hash",
+                "standard_id",
+            ):
+                payload.pop(field_name)
         actual = _canonical_hash(payload)
         if actual != self.evaluation_key:
             raise ValueError("evaluation_key does not match EvaluationSpec fields")
@@ -469,6 +549,14 @@ class EvaluationSpec(ContractModel):
             key: value.model_dump(mode="json") if isinstance(value, ContractModel) else value
             for key, value in values.items()
         }
+        if normalized.get("taxonomy_id") is None:
+            for field_name in (
+                "taxonomy_id",
+                "taxonomy_version",
+                "taxonomy_hash",
+                "standard_id",
+            ):
+                normalized.pop(field_name, None)
         payload = {"schema_version": "3.0", **normalized}
         return cls(**payload, evaluation_key=_canonical_hash(payload))
 
@@ -481,6 +569,10 @@ class EvaluationResult(ContractModel):
     target_response: TargetResponse
     grounding_artifact: GroundingArtifact
     intent_analysis: IntentAnalysis
+    category_analysis: CategoryAnalysis | None = None
+    category_route_hash: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    routed_category_ids: tuple[str, ...] = ()
+    category_results: tuple[CategoryEvaluationResult, ...] = ()
     constitution_route_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
     constitution_route_action: Literal["evaluate", "review_required", "not_evaluated"]
     constitution_scenarios: tuple[NonEmptyString, ...] = ()
@@ -491,6 +583,20 @@ class EvaluationResult(ContractModel):
 
     @model_validator(mode="after")
     def require_complete_isolated_panel(self) -> EvaluationResult:
+        if self.category_analysis is None:
+            if self.category_route_hash is not None or self.routed_category_ids:
+                raise ValueError("category route metadata requires category analysis")
+        elif tuple(sorted(self.category_analysis.category_ids)) != tuple(
+            sorted(self.routed_category_ids)
+        ):
+            raise ValueError("category analysis and routed category IDs do not match")
+        if self.category_results:
+            result_ids = {item.category_id for item in self.category_results}
+            if result_ids != set(self.routed_category_ids):
+                raise ValueError("category results do not cover routed categories")
+            if self.verdicts or self.judge_failures:
+                raise ValueError("category routing stores verdicts inside category_results")
+            return self._validate_common_result_links()
         axes = {verdict.axis for verdict in self.verdicts}
         expected_axes: set[JudgeAxis] = set()
         if self.constitution_route_action == "evaluate":
@@ -507,6 +613,9 @@ class EvaluationResult(ContractModel):
                 raise ValueError("verdicts and failures do not cover the routed axes")
         elif axes != expected_axes or failed_axes:
             raise ValueError("verdicts do not match the axes routed for this request")
+        return self._validate_common_result_links()
+
+    def _validate_common_result_links(self) -> EvaluationResult:
         if self.target_response.sample_id != self.sample_id:
             raise ValueError("target response sample_id must match evaluation sample_id")
         if self.request_snapshot.sample_id != self.sample_id:

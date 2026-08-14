@@ -16,6 +16,7 @@ from safejudge.contracts.evaluation import TargetResponse
 from safejudge.contracts.judging import (
     ArbitrationDecision,
     ArbitrationResolutionStatus,
+    CategoryAnalysis,
     ComplianceReasonCode,
     EnablementReasonCode,
     EnablementScores,
@@ -56,6 +57,7 @@ from safejudge.models.profiles import (
     ModelProfile,
     StructuredOutputMode,
 )
+from safejudge.taxonomy.contracts import TaxonomyPack
 from safejudge.workflows.evidence import (
     EvidenceCandidate,
     build_evidence_candidates,
@@ -63,9 +65,11 @@ from safejudge.workflows.evidence import (
 )
 from safejudge.workflows.prompts import (
     ARBITRATION_PROMPT_VERSION,
+    CATEGORY_ROUTER_PROMPT_VERSION,
     INTENT_PROMPT_VERSION,
     PANEL_PROMPT_VERSION,
     arbitration_prompt,
+    category_router_prompt,
     intent_prompt,
     panel_prompt,
 )
@@ -86,6 +90,17 @@ class _IntentPayload(ContractModel):
     )
     grounding_evidence_ids: tuple[str, ...] = Field(default=(), max_length=16)
     confidence: float = Field(ge=0, le=1)
+
+
+class _CategoryPayload(ContractModel):
+    category_ids: tuple[str, ...] = Field(default=(), max_length=64)
+    confidence: float = Field(ge=0, le=1)
+
+    @model_validator(mode="after")
+    def category_ids_are_unique(self) -> _CategoryPayload:
+        if len(set(self.category_ids)) != len(self.category_ids):
+            raise ValueError("category_ids must be unique")
+        return self
 
 
 class _CompliancePayload(ContractModel):
@@ -254,6 +269,41 @@ class JudgeRunner:
             trace=_trace(result),
         )
 
+    async def classify_categories(
+        self,
+        request_snapshot: RequestSnapshot,
+        *,
+        target_response: TargetResponse,
+        intent: IntentAnalysis,
+        taxonomy: TaxonomyPack,
+        context: InvocationContext,
+        parameters: Mapping[str, JsonValue] | None = None,
+    ) -> CategoryAnalysis:
+        result = await self._invoke(
+            request_id=f"judge:category-router:{request_snapshot.sample_id}",
+            prompt=category_router_prompt(
+                request_snapshot=request_snapshot,
+                target_response=target_response,
+                intent=intent,
+                taxonomy=taxonomy,
+            ),
+            context=context,
+            parameters=parameters,
+            payload_schema=_CategoryPayload,
+            evidence_candidates=(),
+            semantic_validator=lambda payload: _validate_category_payload(
+                payload,
+                taxonomy=taxonomy,
+            ),
+        )
+        payload = self._validate_payload(_CategoryPayload, result.response.answer)
+        return CategoryAnalysis(
+            category_ids=tuple(sorted(payload.category_ids)),
+            confidence=payload.confidence,
+            prompt_version=CATEGORY_ROUTER_PROMPT_VERSION,
+            trace=_trace(result),
+        )
+
     async def judge(
         self,
         *,
@@ -264,6 +314,8 @@ class JudgeRunner:
         grounding: GroundingArtifact,
         intent: IntentAnalysis,
         constitution: CompiledConstitution,
+        category_id: str | None = None,
+        constitution_id: str | None = None,
         context: InvocationContext,
         parameters: Mapping[str, JsonValue] | None = None,
     ) -> JudgeVerdict:
@@ -292,7 +344,10 @@ class JudgeRunner:
             if candidate.source in set(constitution.allowed_evidence_sources)
         )
         result = await self._invoke(
-            request_id=f"judge:{axis.value}:{sample_id}",
+            request_id=(
+                f"judge:{axis.value}:{sample_id}"
+                + (f":{category_id}" if category_id is not None else "")
+            ),
             prompt=panel_prompt(
                 axis=axis,
                 sample_id=sample_id,
@@ -333,6 +388,9 @@ class JudgeRunner:
                     enablement_scores=scores,
                     prompt_version=PANEL_PROMPT_VERSION,
                     trace=_trace(result),
+                    category_id=category_id,
+                    constitution_id=constitution_id,
+                    compiled_constitution_hash=constitution.compiled_hash,
                 )
             label: JudgeLabel
             confidence: float
@@ -365,6 +423,9 @@ class JudgeRunner:
                 ),
                 prompt_version=PANEL_PROMPT_VERSION,
                 trace=_trace(result),
+                category_id=category_id,
+                constitution_id=constitution_id,
+                compiled_constitution_hash=constitution.compiled_hash,
             )
         except ValidationError as error:
             raise ContractValidationError(
@@ -527,6 +588,21 @@ def _decode_json_object(raw: str) -> dict[str, Any]:
     if not isinstance(decoded, dict):
         raise ValueError("top-level judge response must be an object")
     return decoded
+
+
+def _validate_category_payload(
+    payload: ContractModel,
+    *,
+    taxonomy: TaxonomyPack,
+) -> None:
+    if not isinstance(payload, _CategoryPayload):
+        raise ContractValidationError("invalid Category Router payload")
+    allowed = {category.category_id for category in taxonomy.routed_categories}
+    unknown = sorted(set(payload.category_ids) - allowed)
+    if unknown:
+        raise ContractValidationError(
+            "Category Router returned unavailable IDs: " + ", ".join(unknown)
+        )
 
 
 def _structured_response_format(

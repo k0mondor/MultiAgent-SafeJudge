@@ -19,6 +19,7 @@ class CompiledConstitution(ContractModel):
     constitution_version: str
     constitution_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
     scope_id: str
+    category_id: str | None = None
     axis: str
     scenarios: tuple[str, ...]
     applied_rule_ids: tuple[str, ...]
@@ -37,6 +38,7 @@ def compile_constitution(
     *,
     axis: JudgeAxis | Literal["intent", "aggregation", "arbitration"],
     scenarios: frozenset[str] = frozenset(),
+    category_id: str | None = None,
 ) -> CompiledConstitution:
     axis_name = axis.value if isinstance(axis, JudgeAxis) else axis
     selected = tuple(
@@ -44,6 +46,7 @@ def compile_constitution(
         for rule in pack.rules
         if (axis_name in rule.applies_to or "all" in rule.applies_to)
         and set(rule.scenarios).issubset(scenarios)
+        and (not rule.category_ids or category_id in rule.category_ids)
     )
     selected = tuple(sorted(selected, key=lambda rule: (-rule.priority, rule.rule_id)))
     selected_ids = {rule.rule_id for rule in selected}
@@ -59,6 +62,7 @@ def compile_constitution(
         "constitution_version": pack.version,
         "constitution_hash": pack.constitution_hash,
         "scope_id": pack.scope_id,
+        "category_id": category_id,
         "axis": axis_name,
         "scenarios": sorted(scenarios),
         "applied_rule_ids": [rule.rule_id for rule in selected],

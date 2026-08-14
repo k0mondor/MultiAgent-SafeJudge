@@ -20,6 +20,8 @@ from safejudge.contracts.evaluation import (
 from safejudge.contracts.judging import (
     AggregateDecision,
     ArbitrationDecision,
+    CategoryAnalysis,
+    CategoryEvaluationResult,
     EnablementScores,
     EvaluationResult,
     EvaluationSpec,
@@ -58,6 +60,8 @@ __all__ = [
     "ArbitrationDecision",
     "ArtifactRef",
     "CanonicalMultimodalSample",
+    "CategoryAnalysis",
+    "CategoryEvaluationResult",
     "DatasetSplit",
     "EnablementScores",
     "EvaluationResult",

@@ -31,6 +31,7 @@ class ConstitutionRule(ContractModel):
     rule_version: str = Field(min_length=1)
     rule_type: RuleType
     applies_to: tuple[str, ...] = Field(min_length=1)
+    category_ids: tuple[str, ...] = ()
     scenarios: tuple[str, ...] = ()
     required_evidence_sources: tuple[str, ...] = ()
     allowed_evidence_sources: tuple[str, ...] = ()
@@ -38,9 +39,18 @@ class ConstitutionRule(ContractModel):
     effect: RuleEffect = Field(default_factory=RuleEffect)
     priority: int = Field(default=0, ge=0, le=1_000)
 
+    @model_validator(mode="after")
+    def category_ids_are_unique(self) -> ConstitutionRule:
+        if len(set(self.category_ids)) != len(self.category_ids):
+            raise ValueError("constitution rule category IDs must be unique")
+        return self
+
     @property
     def rule_hash(self) -> str:
-        return _canonical_hash(self.model_dump(mode="json"))
+        payload = self.model_dump(mode="json")
+        if not self.category_ids:
+            payload.pop("category_ids")
+        return _canonical_hash(payload)
 
 
 class ConstitutionPack(ContractModel):
@@ -59,7 +69,12 @@ class ConstitutionPack(ContractModel):
 
     @property
     def constitution_hash(self) -> str:
-        return _canonical_hash(self.model_dump(mode="json"))
+        payload = self.model_dump(mode="json")
+        for group_name in ("core_rules", "domain_rules", "scenario_rules"):
+            for rule in payload[group_name]:
+                if not rule["category_ids"]:
+                    rule.pop("category_ids")
+        return _canonical_hash(payload)
 
     @model_validator(mode="after")
     def rules_are_unambiguous(self) -> ConstitutionPack:

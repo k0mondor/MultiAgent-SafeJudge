@@ -52,6 +52,12 @@ dry-run 或静默降级。任一 Target、Grounding、Judge 失败，结果缺�
 模型接口见 [M2 模型层](docs/MODEL_LAYER.md)，数据转换见
 [数据集接入说明](docs/DATASETS.md)。
 
+国标风险分类使用独立、版本化的 Taxonomy 配置。标准编号、版本、正式分类名称、条款定位、
+官方来源及其与 Constitution Pack 的映射规范见
+[标准来源与溯源约定](docs/standards/README.md)。仓库现已录入 GB/T 45654-2025 附录 A 的
+5 个父类和 31 个叶子小类，并为每个叶子小类启用 Constitution 映射和多标签 Category Router；
+国标正文因再分发许可不明确不提交，仅保留官方来源、条款定位和版本化映射。
+
 ## 仓库边界
 
 远端仓库只保存可维护的源码、版本化配置、正式端到端验收入口和结果摘要。Benchmark 原始

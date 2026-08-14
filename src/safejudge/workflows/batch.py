@@ -40,6 +40,7 @@ from safejudge.grounding.pipeline import GroundingPipeline
 from safejudge.models.base import ModelProvider
 from safejudge.models.cache import SQLiteModelStore
 from safejudge.models.invocation import InvocationPolicy
+from safejudge.taxonomy.contracts import TaxonomyPack
 from safejudge.workflows.checkpoint import sqlite_checkpointer
 from safejudge.workflows.graph import (
     EvaluationContext,
@@ -68,6 +69,10 @@ class EvaluationBatchManifest(ContractModel):
     constitution_id: str
     constitution_version: str
     constitution_hash: Sha256
+    taxonomy_id: str | None = None
+    taxonomy_version: str | None = None
+    taxonomy_hash: Sha256 | None = None
+    standard_id: str | None = None
     grounding_mode: GroundingMode
     grounding_pipeline_id: str
     grounding_pipeline_version: str
@@ -127,6 +132,8 @@ async def run_evaluation_batch(
     max_retries: int = 1,
     parameters: Mapping[str, JsonValue] | None = None,
     constitution_pack: ConstitutionPack | None = None,
+    taxonomy_pack: TaxonomyPack | None = None,
+    constitution_registry: ConstitutionRegistry | None = None,
     grounding_pipeline: GroundingPipeline | None = None,
     limit: int | None = None,
     overwrite: bool = False,
@@ -169,6 +176,13 @@ async def run_evaluation_batch(
     resolved_constitution = constitution_pack or ConstitutionRegistry.load(
         Path("config/constitutions")
     ).get("illegal-enablement-v1")
+    resolved_registry = constitution_registry
+    if taxonomy_pack is not None and resolved_registry is None:
+        resolved_registry = ConstitutionRegistry.load(Path("config/constitutions"))
+    if taxonomy_pack is not None and resolved_registry is not None:
+        for category in taxonomy_pack.routed_categories:
+            for constitution_id in category.constitution_ids:
+                resolved_registry.get(constitution_id)
     resolved_grounding = grounding_pipeline or GroundingPipeline(
         mode=GroundingMode.BENCHMARK_ASSISTED
     )
@@ -176,6 +190,8 @@ async def run_evaluation_batch(
         invocation=context,
         jury=jury,
         constitution_pack=resolved_constitution,
+        taxonomy_pack=taxonomy_pack,
+        constitution_registry=resolved_registry,
         grounding_pipeline=resolved_grounding,
         judge_parameters=dict(parameters or {}),
         node_ledger=SQLiteNodeLedger(node_ledger_path),
@@ -266,6 +282,14 @@ async def run_evaluation_batch(
         constitution_id=resolved_constitution.constitution_id,
         constitution_version=resolved_constitution.version,
         constitution_hash=resolved_constitution.constitution_hash,
+        taxonomy_id=(taxonomy_pack.taxonomy_id if taxonomy_pack is not None else None),
+        taxonomy_version=(
+            taxonomy_pack.taxonomy_version if taxonomy_pack is not None else None
+        ),
+        taxonomy_hash=(
+            taxonomy_pack.taxonomy_hash if taxonomy_pack is not None else None
+        ),
+        standard_id=(taxonomy_pack.standard_id if taxonomy_pack is not None else None),
         grounding_mode=resolved_grounding.mode,
         grounding_pipeline_id=resolved_grounding.pipeline_id,
         grounding_pipeline_version=resolved_grounding.pipeline_version,

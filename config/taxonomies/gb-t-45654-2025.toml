@@ -1,0 +1,370 @@
+[[taxonomies]]
+taxonomy_id = "gb-t-45654-2025-safejudge-v1"
+taxonomy_version = "1.0"
+status = "active"
+standard_id = "GB/T 45654-2025"
+standard_version = "2025"
+standard_title = "网络安全技术 生成式人工智能服务安全基本要求"
+jurisdiction = "CN"
+notes = "Appendix A classification is complete: 5 parent categories and 31 routing-enabled leaf risks. Every leaf maps to a category-filtered executable Constitution pack."
+
+[[taxonomies.sources]]
+source_id = "samr-open-standard"
+title = "网络安全技术 生成式人工智能服务安全基本要求"
+publisher = "国家市场监督管理总局、国家标准化管理委员会"
+publication_date = 2025-04-25
+effective_date = 2025-11-01
+official_url = "https://openstd.samr.gov.cn/bzgk/std/newGbInfo?hcno=F67D3F376E0A0A0FF5317FB36B32A30A"
+accessed_on = 2026-08-14
+license_status = "metadata_only"
+notes = "Official metadata and Appendix A clause locators are confirmed. The standard text is not committed to this repository."
+
+[[taxonomies.categories]]
+category_id = "A.1"
+category_name = "包含违反社会主义核心价值观的内容"
+standard_clause = "附录 A.1"
+source_id = "samr-open-standard"
+source_locator = "附录 A，第 7 页，A.1"
+selectable = false
+
+[[taxonomies.categories]]
+category_id = "A.1.a"
+category_name = "煽动颠覆国家政权、推翻社会主义制度"
+parent_id = "A.1"
+constitution_ids = ["gbt45654-a1-v1"]
+routing_enabled = true
+standard_clause = "附录 A.1 a)"
+source_id = "samr-open-standard"
+source_locator = "附录 A，第 7 页，A.1 a)"
+
+[[taxonomies.categories]]
+category_id = "A.1.b"
+category_name = "危害国家安全和利益、损害国家形象"
+parent_id = "A.1"
+constitution_ids = ["gbt45654-a1-v1"]
+routing_enabled = true
+standard_clause = "附录 A.1 b)"
+source_id = "samr-open-standard"
+source_locator = "附录 A，第 7 页，A.1 b)"
+
+[[taxonomies.categories]]
+category_id = "A.1.c"
+category_name = "煽动分裂国家、破坏国家统一和社会稳定"
+parent_id = "A.1"
+constitution_ids = ["gbt45654-a1-v1"]
+routing_enabled = true
+standard_clause = "附录 A.1 c)"
+source_id = "samr-open-standard"
+source_locator = "附录 A，第 7 页，A.1 c)"
+
+[[taxonomies.categories]]
+category_id = "A.1.d"
+category_name = "宣扬恐怖主义、极端主义"
+parent_id = "A.1"
+constitution_ids = ["gbt45654-a1-v1"]
+routing_enabled = true
+standard_clause = "附录 A.1 d)"
+source_id = "samr-open-standard"
+source_locator = "附录 A，第 7 页，A.1 d)"
+
+[[taxonomies.categories]]
+category_id = "A.1.e"
+category_name = "宣扬民族仇恨"
+parent_id = "A.1"
+constitution_ids = ["gbt45654-a1-v1"]
+routing_enabled = true
+standard_clause = "附录 A.1 e)"
+source_id = "samr-open-standard"
+source_locator = "附录 A，第 7 页，A.1 e)"
+
+[[taxonomies.categories]]
+category_id = "A.1.f"
+category_name = "宣扬暴力、淫秽色情"
+parent_id = "A.1"
+constitution_ids = ["gbt45654-a1-v1"]
+routing_enabled = true
+standard_clause = "附录 A.1 f)"
+source_id = "samr-open-standard"
+source_locator = "附录 A，第 7 页，A.1 f)"
+
+[[taxonomies.categories]]
+category_id = "A.1.g"
+category_name = "传播虚假有害信息"
+parent_id = "A.1"
+constitution_ids = ["gbt45654-a1-v1"]
+routing_enabled = true
+standard_clause = "附录 A.1 g)"
+source_id = "samr-open-standard"
+source_locator = "附录 A，第 7 页，A.1 g)"
+
+[[taxonomies.categories]]
+category_id = "A.1.h"
+category_name = "其他法律、行政法规禁止的内容"
+parent_id = "A.1"
+constitution_ids = ["gbt45654-a1-v1"]
+routing_enabled = true
+standard_clause = "附录 A.1 h)"
+source_id = "samr-open-standard"
+source_locator = "附录 A，第 7 页，A.1 h)"
+
+[[taxonomies.categories]]
+category_id = "A.2"
+category_name = "包含歧视性内容"
+standard_clause = "附录 A.2"
+source_id = "samr-open-standard"
+source_locator = "附录 A，第 7 页，A.2"
+selectable = false
+
+[[taxonomies.categories]]
+category_id = "A.2.a"
+category_name = "民族歧视内容"
+parent_id = "A.2"
+constitution_ids = ["gbt45654-a2-v1"]
+routing_enabled = true
+standard_clause = "附录 A.2 a)"
+source_id = "samr-open-standard"
+source_locator = "附录 A，第 7 页，A.2 a)"
+
+[[taxonomies.categories]]
+category_id = "A.2.b"
+category_name = "信仰歧视内容"
+parent_id = "A.2"
+constitution_ids = ["gbt45654-a2-v1"]
+routing_enabled = true
+standard_clause = "附录 A.2 b)"
+source_id = "samr-open-standard"
+source_locator = "附录 A，第 7 页，A.2 b)"
+
+[[taxonomies.categories]]
+category_id = "A.2.c"
+category_name = "国别歧视内容"
+parent_id = "A.2"
+constitution_ids = ["gbt45654-a2-v1"]
+routing_enabled = true
+standard_clause = "附录 A.2 c)"
+source_id = "samr-open-standard"
+source_locator = "附录 A，第 7 页，A.2 c)"
+
+[[taxonomies.categories]]
+category_id = "A.2.d"
+category_name = "地域歧视内容"
+parent_id = "A.2"
+constitution_ids = ["gbt45654-a2-v1"]
+routing_enabled = true
+standard_clause = "附录 A.2 d)"
+source_id = "samr-open-standard"
+source_locator = "附录 A，第 7 页，A.2 d)"
+
+[[taxonomies.categories]]
+category_id = "A.2.e"
+category_name = "性别歧视内容"
+parent_id = "A.2"
+constitution_ids = ["gbt45654-a2-v1"]
+routing_enabled = true
+standard_clause = "附录 A.2 e)"
+source_id = "samr-open-standard"
+source_locator = "附录 A，第 7 页，A.2 e)"
+
+[[taxonomies.categories]]
+category_id = "A.2.f"
+category_name = "年龄歧视内容"
+parent_id = "A.2"
+constitution_ids = ["gbt45654-a2-v1"]
+routing_enabled = true
+standard_clause = "附录 A.2 f)"
+source_id = "samr-open-standard"
+source_locator = "附录 A，第 7 页，A.2 f)"
+
+[[taxonomies.categories]]
+category_id = "A.2.g"
+category_name = "职业歧视内容"
+parent_id = "A.2"
+constitution_ids = ["gbt45654-a2-v1"]
+routing_enabled = true
+standard_clause = "附录 A.2 g)"
+source_id = "samr-open-standard"
+source_locator = "附录 A，第 7 页，A.2 g)"
+
+[[taxonomies.categories]]
+category_id = "A.2.h"
+category_name = "健康歧视内容"
+parent_id = "A.2"
+constitution_ids = ["gbt45654-a2-v1"]
+routing_enabled = true
+standard_clause = "附录 A.2 h)"
+source_id = "samr-open-standard"
+source_locator = "附录 A，第 7 页，A.2 h)"
+
+[[taxonomies.categories]]
+category_id = "A.2.i"
+category_name = "其他方面歧视内容"
+parent_id = "A.2"
+constitution_ids = ["gbt45654-a2-v1"]
+routing_enabled = true
+standard_clause = "附录 A.2 i)"
+source_id = "samr-open-standard"
+source_locator = "附录 A，第 7 页，A.2 i)"
+
+[[taxonomies.categories]]
+category_id = "A.3"
+category_name = "商业违法违规"
+standard_clause = "附录 A.3"
+source_id = "samr-open-standard"
+source_locator = "附录 A，第 7 页，A.3"
+selectable = false
+
+[[taxonomies.categories]]
+category_id = "A.3.a"
+category_name = "侵犯他人知识产权"
+parent_id = "A.3"
+constitution_ids = ["gbt45654-a3-v1"]
+routing_enabled = true
+standard_clause = "附录 A.3 a)"
+source_id = "samr-open-standard"
+source_locator = "附录 A，第 7 页，A.3 a)"
+
+[[taxonomies.categories]]
+category_id = "A.3.b"
+category_name = "违反商业道德"
+parent_id = "A.3"
+constitution_ids = ["gbt45654-a3-v1"]
+routing_enabled = true
+standard_clause = "附录 A.3 b)"
+source_id = "samr-open-standard"
+source_locator = "附录 A，第 7 页，A.3 b)"
+
+[[taxonomies.categories]]
+category_id = "A.3.c"
+category_name = "泄露他人商业秘密"
+parent_id = "A.3"
+constitution_ids = ["gbt45654-a3-v1"]
+routing_enabled = true
+standard_clause = "附录 A.3 c)"
+source_id = "samr-open-standard"
+source_locator = "附录 A，第 7 页，A.3 c)"
+
+[[taxonomies.categories]]
+category_id = "A.3.d"
+category_name = "利用算法、数据、平台等优势，实施垄断和不正当竞争行为"
+parent_id = "A.3"
+constitution_ids = ["gbt45654-a3-v1"]
+routing_enabled = true
+standard_clause = "附录 A.3 d)"
+source_id = "samr-open-standard"
+source_locator = "附录 A，第 7 页，A.3 d)"
+
+[[taxonomies.categories]]
+category_id = "A.3.e"
+category_name = "其他商业违法违规行为"
+parent_id = "A.3"
+constitution_ids = ["gbt45654-a3-v1"]
+routing_enabled = true
+standard_clause = "附录 A.3 e)"
+source_id = "samr-open-standard"
+source_locator = "附录 A，第 7 页，A.3 e)"
+
+[[taxonomies.categories]]
+category_id = "A.4"
+category_name = "侵犯他人合法权益"
+standard_clause = "附录 A.4"
+source_id = "samr-open-standard"
+source_locator = "附录 A，第 7-8 页，A.4"
+selectable = false
+
+[[taxonomies.categories]]
+category_id = "A.4.a"
+category_name = "危害他人身心健康"
+parent_id = "A.4"
+constitution_ids = ["gbt45654-a4-v1"]
+routing_enabled = true
+standard_clause = "附录 A.4 a)"
+source_id = "samr-open-standard"
+source_locator = "附录 A，第 7 页，A.4 a)"
+
+[[taxonomies.categories]]
+category_id = "A.4.b"
+category_name = "侵害他人肖像权"
+parent_id = "A.4"
+constitution_ids = ["gbt45654-a4-v1"]
+routing_enabled = true
+standard_clause = "附录 A.4 b)"
+source_id = "samr-open-standard"
+source_locator = "附录 A，第 7 页，A.4 b)"
+
+[[taxonomies.categories]]
+category_id = "A.4.c"
+category_name = "侵害他人名誉权"
+parent_id = "A.4"
+constitution_ids = ["gbt45654-a4-v1"]
+routing_enabled = true
+standard_clause = "附录 A.4 c)"
+source_id = "samr-open-standard"
+source_locator = "附录 A，第 7 页，A.4 c)"
+
+[[taxonomies.categories]]
+category_id = "A.4.d"
+category_name = "侵害他人荣誉权"
+parent_id = "A.4"
+constitution_ids = ["gbt45654-a4-v1"]
+routing_enabled = true
+standard_clause = "附录 A.4 d)"
+source_id = "samr-open-standard"
+source_locator = "附录 A，第 7 页，A.4 d)"
+
+[[taxonomies.categories]]
+category_id = "A.4.e"
+category_name = "侵害他人隐私权"
+parent_id = "A.4"
+constitution_ids = ["gbt45654-a4-v1"]
+routing_enabled = true
+standard_clause = "附录 A.4 e)"
+source_id = "samr-open-standard"
+source_locator = "附录 A，第 8 页，A.4 e)"
+
+[[taxonomies.categories]]
+category_id = "A.4.f"
+category_name = "侵害他人个人信息权益"
+parent_id = "A.4"
+constitution_ids = ["gbt45654-a4-v1"]
+routing_enabled = true
+standard_clause = "附录 A.4 f)"
+source_id = "samr-open-standard"
+source_locator = "附录 A，第 8 页，A.4 f)"
+
+[[taxonomies.categories]]
+category_id = "A.4.g"
+category_name = "侵犯他人其他合法权益"
+parent_id = "A.4"
+constitution_ids = ["gbt45654-a4-v1"]
+routing_enabled = true
+standard_clause = "附录 A.4 g)"
+source_id = "samr-open-standard"
+source_locator = "附录 A，第 8 页，A.4 g)"
+
+[[taxonomies.categories]]
+category_id = "A.5"
+category_name = "无法满足特定服务类型的安全需求"
+standard_clause = "附录 A.5"
+source_id = "samr-open-standard"
+source_locator = "附录 A，第 8 页，A.5"
+selectable = false
+
+[[taxonomies.categories]]
+category_id = "A.5.a"
+category_name = "内容不准确，严重不符合科学常识或主流认知"
+parent_id = "A.5"
+constitution_ids = ["gbt45654-a5-v1"]
+routing_enabled = true
+standard_clause = "附录 A.5 a)"
+source_id = "samr-open-standard"
+source_locator = "附录 A，第 8 页，A.5 a)"
+
+[[taxonomies.categories]]
+category_id = "A.5.b"
+category_name = "内容不可靠，虽然不包含严重错误的内容，但无法对使用者形成帮助"
+parent_id = "A.5"
+constitution_ids = ["gbt45654-a5-v1"]
+routing_enabled = true
+standard_clause = "附录 A.5 b)"
+source_id = "samr-open-standard"
+source_locator = "附录 A，第 8 页，A.5 b)"

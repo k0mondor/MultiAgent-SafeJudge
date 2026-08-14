@@ -10,7 +10,8 @@ flowchart LR
     A[Canonical sample] --> T[Target answer]
     T --> B[Blind or benchmark-assisted grounding]
     B --> I[Request-only intent isolation]
-    I --> U[Constitution Router]
+    I --> Q[Optional multi-label Category Router]
+    Q --> U[Constitution Router]
     U --> C[Compliance subgraph]
     U --> S[Harm enablement subgraph]
     U -->|benign only| O[Oversensitivity subgraph]
@@ -32,6 +33,9 @@ flowchart LR
   label 写入 snapshot；媒体工具不可用时 Router 直接产生 `review_required`。
 - intake 前生成去路径化的不可变 `RequestSnapshot`。子裁判同时看到原始快照和主裁判
   分析，因此主裁判摘要不是唯一事实来源。
+- 启用 Taxonomy 后，独立 Category Router 查看冻结的 Target 回答，可一次返回零个、一个或
+  多个叶子小类。程序只接受配置中 `routing_enabled` 的 ID，并为每个“小类 × Constitution ×
+  评判轴”单独派发任务；不同小类的结果保存在 `category_results`，不会被折叠为父类。
 - Compliance、enablement 和条件启用的 oversensitivity 是独立 LangGraph 子图。每个 `Send`
   只包含样本 ID、同一份已固化回答和
   主裁判简报，不包含任何其他子裁判输出。
@@ -40,6 +44,9 @@ flowchart LR
 - `illegal-enablement-v1` ConstitutionPack 按轴编译语义、Evidence、输出和确定性规则；scope
   route 由 grounding + intent 决定，oversensitivity 仅在 benign 请求上直接启用；
   每个 Judge 只收到当前轴适用的规则片段和审计身份，不接收一篇全局宪法。
+- GB/T 45654-2025 模式使用 `gbt45654-a1-v1` 至 `gbt45654-a5-v1`。编译器额外按
+  `category_id` 过滤规则，每条 verdict 保存小类 ID、Constitution ID 和编译哈希；总体等级
+  由各小类独立聚合结果中的最严重等级确定。
 - 聚合器是纯确定性代码。合规性与赋能度冲突，或任一裁判置信度低于阈值时，才调用
   仲裁 Agent。仲裁不再直接提交最终 `0/1/2`，只能标记失效轴并修复受控字段；代码随后
   重新聚合。无法解决时输出 `review_required`。

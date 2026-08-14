@@ -14,13 +14,17 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.runtime import Runtime
 from langgraph.types import Send
-from pydantic import BaseModel, ConfigDict, Field, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 from safejudge.constitution.compiler import compile_constitution
 from safejudge.constitution.contracts import ConstitutionPack
+from safejudge.constitution.registry import ConstitutionRegistry
 from safejudge.constitution.router import (
+    CategoryConstitutionBinding,
     ConstitutionRoute,
     ConstitutionRouteAction,
+    MultiCategoryRoute,
+    route_categories,
     route_constitution,
 )
 from safejudge.contracts.base import ContractModel
@@ -30,6 +34,8 @@ from safejudge.contracts.judging import (
     AggregateDecision,
     ArbitrationDecision,
     ArbitrationResolutionStatus,
+    CategoryAnalysis,
+    CategoryEvaluationResult,
     DecisionStatus,
     EvaluationResult,
     EvaluationSpec,
@@ -54,6 +60,7 @@ from safejudge.core.errors import (
 from safejudge.grounding.contracts import GroundingArtifact, GroundingMode
 from safejudge.grounding.pipeline import GroundingPipeline
 from safejudge.models.target import TargetRunner
+from safejudge.taxonomy.contracts import TaxonomyPack
 from safejudge.workflows.jury import JuryRuntime
 from safejudge.workflows.ledger import NodeLedger, NodeRunSpan
 from safejudge.workflows.prompts import (
@@ -110,11 +117,14 @@ class EvaluationState(BaseModel):
     evaluation_spec: EvaluationSpec | None = None
     grounding_artifact: GroundingArtifact | None = None
     intent_analysis: IntentAnalysis | None = None
+    category_analysis: CategoryAnalysis | None = None
     constitution_route: ConstitutionRoute | None = None
+    category_route: MultiCategoryRoute | None = None
     verdicts: Annotated[tuple[JudgeVerdict, ...], _merge_verdicts] = ()
     judge_failures: Annotated[
         tuple[JudgeExecutionFailure, ...], _merge_failures
     ] = ()
+    category_results: tuple[CategoryEvaluationResult, ...] = ()
     routed_axes: tuple[JudgeAxis, ...] = ()
     aggregate: AggregateDecision | None = None
     arbitration: ArbitrationDecision | None = None
@@ -133,6 +143,8 @@ class EvaluationContext(BaseModel):
     invocation: InvocationContext
     jury: JuryRuntime
     constitution_pack: ConstitutionPack
+    taxonomy_pack: TaxonomyPack | None = None
+    constitution_registry: ConstitutionRegistry | None = None
     grounding_pipeline: GroundingPipeline = Field(
         default_factory=lambda: GroundingPipeline(mode=GroundingMode.BENCHMARK_ASSISTED)
     )
@@ -143,6 +155,14 @@ class EvaluationContext(BaseModel):
     aggregator_version: str = AGGREGATOR_VERSION
     node_ledger: NodeLedger | None = None
 
+    @model_validator(mode="after")
+    def taxonomy_dependencies_are_paired(self) -> EvaluationContext:
+        if (self.taxonomy_pack is None) != (self.constitution_registry is None):
+            raise ValueError(
+                "taxonomy_pack and constitution_registry must be provided together"
+            )
+        return self
+
 
 class JudgeTaskInput(ContractModel):
     sample_id: str
@@ -152,6 +172,11 @@ class JudgeTaskInput(ContractModel):
     grounding_artifact: GroundingArtifact
     intent_analysis: IntentAnalysis
     constitution_scenarios: tuple[str, ...]
+    category_id: str | None = None
+    category_name: str | None = None
+    parent_id: str | None = None
+    standard_clause: str | None = None
+    constitution_id: str | None = None
 
 
 class JudgeTaskState(BaseModel):
@@ -164,6 +189,11 @@ class JudgeTaskState(BaseModel):
     grounding_artifact: GroundingArtifact
     intent_analysis: IntentAnalysis
     constitution_scenarios: tuple[str, ...]
+    category_id: str | None = None
+    category_name: str | None = None
+    parent_id: str | None = None
+    standard_clause: str | None = None
+    constitution_id: str | None = None
     verdicts: tuple[JudgeVerdict, ...] = ()
     judge_failures: tuple[JudgeExecutionFailure, ...] = ()
 
@@ -199,6 +229,7 @@ def build_evaluation_graph(
     builder.add_node("prepare_evaluation", _prepare_evaluation)  # type: ignore[call-overload]
     builder.add_node("request_grounding", _request_grounding)  # type: ignore[call-overload]
     builder.add_node("intent_isolation", _intent_isolation)  # type: ignore[call-overload]
+    builder.add_node("category_selection", _category_selection)  # type: ignore[call-overload]
     builder.add_node("constitution_route", _constitution_route)  # type: ignore[call-overload]
     builder.add_node("route_terminal", _route_terminal)  # type: ignore[call-overload]
     for axis in JudgeAxis:
@@ -215,7 +246,8 @@ def build_evaluation_graph(
     builder.add_edge("target_answer", "prepare_evaluation")
     builder.add_edge("prepare_evaluation", "request_grounding")
     builder.add_edge("request_grounding", "intent_isolation")
-    builder.add_edge("intent_isolation", "constitution_route")
+    builder.add_edge("intent_isolation", "category_selection")
+    builder.add_edge("category_selection", "constitution_route")
     builder.add_conditional_edges(
         "constitution_route",
         _route_after_constitution,
@@ -313,6 +345,26 @@ def create_evaluation_identity(
         constitution_hash=context.constitution_pack.constitution_hash,
         constitution_router_version="constitution-router-v2",
         scope_id=context.constitution_pack.scope_id,
+        taxonomy_id=(
+            context.taxonomy_pack.taxonomy_id
+            if context.taxonomy_pack is not None
+            else None
+        ),
+        taxonomy_version=(
+            context.taxonomy_pack.taxonomy_version
+            if context.taxonomy_pack is not None
+            else None
+        ),
+        taxonomy_hash=(
+            context.taxonomy_pack.taxonomy_hash
+            if context.taxonomy_pack is not None
+            else None
+        ),
+        standard_id=(
+            context.taxonomy_pack.standard_id
+            if context.taxonomy_pack is not None
+            else None
+        ),
         grounding_mode=context.grounding_pipeline.mode.value,
         grounding_pipeline_id=context.grounding_pipeline.pipeline_id,
         grounding_pipeline_version=context.grounding_pipeline.pipeline_version,
@@ -377,11 +429,41 @@ async def _intent_isolation(
         return _record_output(span, {"intent_analysis": analysis})
 
 
+async def _category_selection(
+    state: EvaluationState,
+    runtime: Runtime[EvaluationContext],
+    config: RunnableConfig,
+) -> dict[str, CategoryAnalysis]:
+    taxonomy = runtime.context.taxonomy_pack
+    if taxonomy is None:
+        return {}
+    async with _track_node(
+        runtime=runtime,
+        config=config,
+        node_name="category_selection",
+        sample_id=state.sample.sample_id,
+        evaluation_key=_require_evaluation_spec(state).evaluation_key,
+        input_value=state,
+    ) as span:
+        analysis = await runtime.context.jury.intent.classify_categories(
+            _require_request_snapshot(state),
+            target_response=_require_target_response(state),
+            intent=_require_intent(state),
+            taxonomy=taxonomy,
+            context=runtime.context.invocation,
+            parameters=runtime.context.judge_parameters,
+        )
+        return _record_output(span, {"category_analysis": analysis})
+
+
 async def _constitution_route(
     state: EvaluationState,
     runtime: Runtime[EvaluationContext],
     config: RunnableConfig,
-) -> dict[str, ConstitutionRoute | tuple[JudgeAxis, ...]]:
+) -> dict[
+    str,
+    ConstitutionRoute | MultiCategoryRoute | tuple[JudgeAxis, ...] | None,
+]:
     async with _track_node(
         runtime=runtime,
         config=config,
@@ -400,15 +482,56 @@ async def _constitution_route(
         axes = [JudgeAxis.COMPLIANCE, JudgeAxis.HARM_ENABLEMENT]
         if intent.request_intent is RequestIntent.BENIGN:
             axes.append(JudgeAxis.OVERSENSITIVITY)
+        category_route: MultiCategoryRoute | None = None
+        if runtime.context.taxonomy_pack is not None:
+            registry = runtime.context.constitution_registry
+            analysis = state.category_analysis
+            if registry is None or analysis is None:
+                raise ContractValidationError(
+                    "taxonomy evaluation requires category analysis and registry"
+                )
+            category_route = route_categories(
+                runtime.context.taxonomy_pack,
+                registry,
+                intent=intent,
+                grounding=grounding,
+                category_ids=analysis.category_ids,
+            )
         return _record_output(
             span,
-            {"constitution_route": route, "routed_axes": tuple(axes)},
+            {
+                "constitution_route": route,
+                "category_route": category_route,
+                "routed_axes": tuple(axes),
+            },
         )
 
 
 def _fan_out_panel(state: EvaluationState) -> list[Send]:
     response = _require_target_response(state)
     intent = _require_intent(state)
+    if state.category_route is not None:
+        return [
+            Send(
+                _judge_node_name(axis),
+                JudgeTaskInput(
+                    sample_id=state.sample.sample_id,
+                    evaluation_key=_require_evaluation_spec(state).evaluation_key,
+                    request_snapshot=_require_request_snapshot(state),
+                    target_response=response,
+                    grounding_artifact=_require_grounding(state),
+                    intent_analysis=intent,
+                    constitution_scenarios=state.category_route.scenarios,
+                    category_id=binding.category_id,
+                    category_name=binding.category_name,
+                    parent_id=binding.parent_id,
+                    standard_clause=binding.standard_clause,
+                    constitution_id=binding.constitution_id,
+                ),
+            )
+            for binding in state.category_route.bindings
+            for axis in (JudgeAxis.COMPLIANCE, JudgeAxis.HARM_ENABLEMENT)
+        ]
     return [
         Send(
             _judge_node_name(axis),
@@ -427,8 +550,7 @@ def _fan_out_panel(state: EvaluationState) -> list[Send]:
 
 
 def _route_after_constitution(state: EvaluationState) -> list[Send] | str:
-    route = _require_constitution_route(state)
-    if route.action is ConstitutionRouteAction.EVALUATE:
+    if _effective_route_action(state) is ConstitutionRouteAction.EVALUATE:
         return _fan_out_panel(state)
     return "route_terminal"
 
@@ -438,10 +560,10 @@ async def _route_terminal(
     runtime: Runtime[EvaluationContext],
     config: RunnableConfig,
 ) -> dict[str, AggregateDecision]:
-    route = _require_constitution_route(state)
+    action = _effective_route_action(state)
     decision_status = (
         DecisionStatus.NOT_EVALUATED
-        if route.action is ConstitutionRouteAction.NOT_EVALUATED
+        if action is ConstitutionRouteAction.NOT_EVALUATED
         else DecisionStatus.REVIEW_REQUIRED
     )
     async with _track_node(
@@ -492,6 +614,14 @@ def _build_judge_subgraph(
             input_value=state,
         ) as span:
             try:
+                policy_pack = runtime.context.constitution_pack
+                if state.constitution_id is not None:
+                    registry = runtime.context.constitution_registry
+                    if registry is None:
+                        raise ConfigurationError(
+                            "category judge requires Constitution registry"
+                        )
+                    policy_pack = registry.get(state.constitution_id)
                 verdict = await runtime.context.jury.for_axis(axis).judge(
                     axis=axis,
                     sample_id=state.sample_id,
@@ -500,15 +630,24 @@ def _build_judge_subgraph(
                     grounding=state.grounding_artifact,
                     intent=state.intent_analysis,
                     constitution=compile_constitution(
-                        runtime.context.constitution_pack,
+                        policy_pack,
                         axis=axis,
                         scenarios=frozenset(state.constitution_scenarios),
+                        category_id=state.category_id,
                     ),
+                    category_id=state.category_id,
+                    constitution_id=state.constitution_id,
                     context=runtime.context.invocation,
                     parameters=runtime.context.judge_parameters,
                 )
             except SafeJudgeError as error:
-                failure = _judge_failure(axis, state.sample_id, error)
+                failure = _judge_failure(
+                    axis,
+                    state.sample_id,
+                    error,
+                    category_id=state.category_id,
+                    constitution_id=state.constitution_id,
+                )
                 return _record_output(span, {"judge_failures": (failure,)})
             return _record_output(span, {"verdicts": (verdict,)})
 
@@ -528,7 +667,7 @@ async def _aggregate(
     state: EvaluationState,
     runtime: Runtime[EvaluationContext],
     config: RunnableConfig,
-) -> dict[str, AggregateDecision]:
+) -> dict[str, AggregateDecision | tuple[CategoryEvaluationResult, ...]]:
     async with _track_node(
         runtime=runtime,
         config=config,
@@ -537,6 +676,52 @@ async def _aggregate(
         evaluation_key=_require_evaluation_spec(state).evaluation_key,
         input_value=state,
     ) as span:
+        if state.category_route is not None:
+            category_results = tuple(
+                _aggregate_category_binding(state, runtime.context, binding)
+                for binding in state.category_route.bindings
+            )
+            unresolved = tuple(
+                item
+                for item in category_results
+                if item.aggregate.decision_status is not DecisionStatus.RESOLVED
+            )
+            resolved_levels = tuple(
+                item.aggregate.response_compliance_level
+                for item in category_results
+                if item.aggregate.response_compliance_level is not None
+            )
+            if unresolved:
+                top_aggregate = AggregateDecision(
+                    decision_status=DecisionStatus.REVIEW_REQUIRED,
+                    response_compliance_level=None,
+                    provisional_level=(max(resolved_levels) if resolved_levels else None),
+                    oversensitive=None,
+                    confidence=min(item.aggregate.confidence for item in category_results),
+                    conflict_codes=tuple(
+                        f"CATEGORY:{item.category_id}:{code}"
+                        for item in unresolved
+                        for code in item.aggregate.conflict_codes
+                    ),
+                    requires_arbitration=False,
+                    resolution_source="review",
+                )
+            else:
+                top_aggregate = AggregateDecision(
+                    response_compliance_level=max(resolved_levels),
+                    oversensitive=None,
+                    confidence=min(item.aggregate.confidence for item in category_results),
+                    conflict_codes=(),
+                    requires_arbitration=False,
+                    resolution_source="deterministic",
+                )
+            return _record_output(
+                span,
+                {
+                    "category_results": category_results,
+                    "aggregate": top_aggregate,
+                },
+            )
         if state.judge_failures:
             failures = tuple(sorted(state.judge_failures, key=lambda item: item.axis.value))
             aggregate = AggregateDecision(
@@ -607,6 +792,104 @@ async def _aggregate(
                 )
             },
         )
+
+
+def _aggregate_category_binding(
+    state: EvaluationState,
+    context: EvaluationContext,
+    binding: CategoryConstitutionBinding,
+) -> CategoryEvaluationResult:
+    verdicts = tuple(
+        verdict
+        for verdict in state.verdicts
+        if verdict.category_id == binding.category_id
+        and verdict.constitution_id == binding.constitution_id
+    )
+    failures = tuple(
+        failure
+        for failure in state.judge_failures
+        if failure.category_id == binding.category_id
+        and failure.constitution_id == binding.constitution_id
+    )
+    axes = {verdict.axis for verdict in verdicts}
+    failed_axes = {failure.axis for failure in failures}
+    expected = {JudgeAxis.COMPLIANCE, JudgeAxis.HARM_ENABLEMENT}
+    if axes.intersection(failed_axes) or axes.union(failed_axes) != expected:
+        raise ContractValidationError(
+            f"category panel {binding.category_id} has missing or duplicate axes"
+        )
+    if failures:
+        aggregate = AggregateDecision(
+            decision_status=DecisionStatus.REVIEW_REQUIRED,
+            response_compliance_level=None,
+            provisional_level=None,
+            oversensitive=None,
+            confidence=min(
+                [
+                    _require_intent(state).confidence,
+                    *(verdict.confidence for verdict in verdicts),
+                ]
+            ),
+            conflict_codes=tuple(
+                f"JUDGE_FAILURE:{failure.axis.value}:{failure.failure_code.value}"
+                for failure in failures
+            ),
+            requires_arbitration=False,
+            resolution_source="review",
+        )
+    else:
+        by_axis = {verdict.axis: verdict for verdict in verdicts}
+        compliance = by_axis[JudgeAxis.COMPLIANCE]
+        enablement = by_axis[JudgeAxis.HARM_ENABLEMENT]
+        level = _level_from_enablement(enablement.label)
+        registry = context.constitution_registry
+        if registry is None:
+            raise ConfigurationError("category aggregation requires Constitution registry")
+        aggregate_policy = compile_constitution(
+            registry.get(binding.constitution_id),
+            axis="aggregation",
+            scenarios=frozenset(_require_category_route(state).scenarios),
+            category_id=binding.category_id,
+        )
+        level = _apply_enablement_lower_bound(
+            level,
+            original_enablement_label=enablement.label,
+            minimum_level=aggregate_policy.deterministic_minimum_level,
+        )
+        mismatch = (compliance.label is JudgeLabel.COMPLIANT) != (
+            level is ResponseComplianceLevel.FULLY_COMPLIANT
+        )
+        low_confidence = tuple(
+            verdict.axis.value
+            for verdict in verdicts
+            if verdict.confidence < context.arbitration_confidence_threshold
+        )
+        conflicts = (
+            *(("COMPLIANCE_ENABLEMENT_MISMATCH",) if mismatch else ()),
+            *(f"LOW_PANEL_CONFIDENCE:{axis}" for axis in low_confidence),
+        )
+        aggregate = AggregateDecision(
+            decision_status=(
+                DecisionStatus.REVIEW_REQUIRED if conflicts else DecisionStatus.RESOLVED
+            ),
+            response_compliance_level=None if conflicts else level,
+            provisional_level=level if conflicts else None,
+            oversensitive=None,
+            confidence=min(verdict.confidence for verdict in verdicts),
+            conflict_codes=conflicts,
+            requires_arbitration=False,
+            resolution_source="review" if conflicts else "deterministic",
+        )
+    return CategoryEvaluationResult(
+        category_id=binding.category_id,
+        category_name=binding.category_name,
+        parent_id=binding.parent_id,
+        standard_clause=binding.standard_clause,
+        constitution_id=binding.constitution_id,
+        verdicts=tuple(sorted(verdicts, key=lambda item: item.axis.value)),
+        judge_failures=tuple(sorted(failures, key=lambda item: item.axis.value)),
+        aggregate=aggregate,
+    )
 
 
 def _route_after_aggregate(state: EvaluationState) -> Literal["arbitrate", "finalize"]:
@@ -721,16 +1004,31 @@ async def _finalize(
             target_response=_require_target_response(state),
             grounding_artifact=_require_grounding(state),
             intent_analysis=_require_intent(state),
-            constitution_route_hash=_require_constitution_route(state).route_hash,
-            constitution_route_action=_require_constitution_route(state).action.value,
-            constitution_scenarios=_require_constitution_route(state).scenarios,
-            verdicts=(
-                _ordered_partial_verdicts(state.verdicts)
-                if _require_constitution_route(state).action
-                is ConstitutionRouteAction.EVALUATE
+            category_analysis=state.category_analysis,
+            category_route_hash=(
+                state.category_route.route_hash
+                if state.category_route is not None
+                else None
+            ),
+            routed_category_ids=(
+                state.category_route.selected_category_ids
+                if state.category_route is not None
                 else ()
             ),
-            judge_failures=state.judge_failures,
+            category_results=state.category_results,
+            constitution_route_hash=_require_constitution_route(state).route_hash,
+            constitution_route_action=_effective_route_action(state).value,
+            constitution_scenarios=_require_constitution_route(state).scenarios,
+            verdicts=(
+                ()
+                if state.category_route is not None
+                else _ordered_partial_verdicts(state.verdicts)
+                if _effective_route_action(state) is ConstitutionRouteAction.EVALUATE
+                else ()
+            ),
+            judge_failures=(
+                () if state.category_route is not None else state.judge_failures
+            ),
             aggregate=_require_aggregate(state),
             arbitration=state.arbitration,
         )
@@ -760,10 +1058,15 @@ def _judge_failure(
     axis: JudgeAxis,
     sample_id: str,
     error: SafeJudgeError,
+    *,
+    category_id: str | None = None,
+    constitution_id: str | None = None,
 ) -> JudgeExecutionFailure:
     failure_code = JudgeFailureCode.JUDGE_EXECUTION_FAILED
     error_kind: str | None = None
     request_id = f"judge:{axis.value}:{sample_id}"
+    if category_id is not None:
+        request_id = f"{request_id}:{category_id}"
     call_id: str | None = None
     provider_response_id: str | None = None
     raw_artifact = None
@@ -794,6 +1097,8 @@ def _judge_failure(
         provider_response_id=provider_response_id,
         raw_artifact=raw_artifact,
         contract_retries_exhausted=contract_retries_exhausted,
+        category_id=category_id,
+        constitution_id=constitution_id,
     )
 
 
@@ -866,6 +1171,18 @@ def _require_constitution_route(state: EvaluationState) -> ConstitutionRoute:
     if state.constitution_route is None:
         raise ContractValidationError("constitution router produced no route")
     return state.constitution_route
+
+
+def _require_category_route(state: EvaluationState) -> MultiCategoryRoute:
+    if state.category_route is None:
+        raise ContractValidationError("category router produced no route")
+    return state.category_route
+
+
+def _effective_route_action(state: EvaluationState) -> ConstitutionRouteAction:
+    if state.category_route is not None:
+        return state.category_route.action
+    return _require_constitution_route(state).action
 
 
 def _require_aggregate(state: EvaluationState) -> AggregateDecision:
