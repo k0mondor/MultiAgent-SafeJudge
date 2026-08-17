@@ -1,13 +1,12 @@
 # MultiAgent-SafeJudge
 
 面向多模态模型回答的可复现安全评测框架。公开 Benchmark 先转换为统一数据协议，由
-被测模型生成并冻结回答，再交给主协调流程进行 blind grounding、意图识别、三席位并行
-裁判、确定性聚合与按需仲裁。
+被测模型生成并冻结回答，再交给主协调流程进行 blind grounding、意图识别、并行分轴
+裁判、确定性聚合与按需仲裁。所有裁判阶段固定复用同一个 Judge 模型。
 
-M3 核心链路已经跑通 20 条真实 API 异构 Jury，并完成一次来自 MM-SafetyBench、MOSSBench
+历史 M3 链路曾跑通 20 条真实 API 异构 Jury，并完成一次来自 MM-SafetyBench、MOSSBench
 和 Omni-SafetyBench 的 9 条混合实验。混合实验暴露的 Target 重试放大和 Grounding 空证据
-问题已经用 v2 profile 修复，并在同一历史失败样本上完成真实回归。工程实现可以收尾，但
-研究验收仍缺一组人工复核的 L1、冲突与仲裁定向实验。当前设计、已测结果和消融计划见
+问题已经用 v2 profile 修复，并在同一历史失败样本上完成真实回归。历史设计和已测结果见
 [阶段汇报](docs/REPORT_BRIEF_20260807.md)，工作流细节见
 [M3 文档](docs/M3_WORKFLOW.md)，三数据集实验的逐样本解释见
 [混合 Jury 实验报告](docs/MIXED_JURY_EXPERIMENT_20260807.md)。
@@ -30,7 +29,7 @@ uv run mypy
 ## 正式端到端验收
 
 仓库只保留一个正式验收脚本。它固定执行：Canonical JSONL → 真实 Target → frozen
-TargetResponse → blind 模型 Grounding → 主协调流程 → 异构 Jury 子裁判 → 聚合/仲裁 →
+TargetResponse → blind 模型 Grounding → 主协调流程 → 单一 Judge 分轴裁判 → 聚合/仲裁 →
 EvaluationResult 与验收报告。
 
 ```powershell
@@ -39,7 +38,7 @@ python scripts/run_e2e_acceptance.py `
   --media-root . `
   --target-profile glm-4.6v-target-v2 `
   --grounding-profile glm-4.6v-grounding-v2 `
-  --jury-plan config/juries/m3-heterogeneous-v1.toml `
+  --jury-plan config/juries/m3-single-judge-v1.toml `
   --output-dir runs/formal-e2e `
   --limit 1 `
   --allow-unqualified-model

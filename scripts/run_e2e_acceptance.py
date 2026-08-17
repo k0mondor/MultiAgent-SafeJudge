@@ -16,7 +16,7 @@ from safejudge.workflows.batch import EvaluationBatchManifest
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Canonical data -> Target -> blind grounding -> heterogeneous Jury -> result"
+            "Canonical data -> Target -> blind grounding -> single Judge -> result"
         )
     )
     parser.add_argument("--input", required=True, type=Path)
@@ -26,7 +26,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--jury-plan",
         type=Path,
-        default=Path("config/juries/m3-heterogeneous-v1.toml"),
+        default=Path("config/juries/m3-single-judge-v1.toml"),
     )
     parser.add_argument(
         "--model-registry",

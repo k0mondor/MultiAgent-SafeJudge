@@ -15,9 +15,7 @@ from safejudge.contracts.evaluation import ResponseComplianceLevel
 
 class RuleType(StrEnum):
     SEMANTIC = "semantic"
-    EVIDENCE = "evidence"
     DETERMINISTIC = "deterministic"
-    OUTPUT = "output"
 
 
 class RuleEffect(ContractModel):
@@ -33,9 +31,6 @@ class ConstitutionRule(ContractModel):
     applies_to: tuple[str, ...] = Field(min_length=1)
     category_ids: tuple[str, ...] = ()
     scenarios: tuple[str, ...] = ()
-    required_evidence_sources: tuple[str, ...] = ()
-    allowed_evidence_sources: tuple[str, ...] = ()
-    allowed_reason_codes: tuple[str, ...] = ()
     effect: RuleEffect = Field(default_factory=RuleEffect)
     priority: int = Field(default=0, ge=0, le=1_000)
 

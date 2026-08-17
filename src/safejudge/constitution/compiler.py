@@ -11,6 +11,7 @@ from pydantic import Field
 from safejudge.constitution.contracts import ConstitutionPack, RuleType
 from safejudge.contracts.base import ContractModel
 from safejudge.contracts.judging import JudgeAxis
+from safejudge.core.errors import ContractValidationError
 
 
 class CompiledConstitution(ContractModel):
@@ -23,12 +24,10 @@ class CompiledConstitution(ContractModel):
     axis: str
     scenarios: tuple[str, ...]
     applied_rule_ids: tuple[str, ...]
+    category_rule_ids: tuple[str, ...] = ()
     applied_rule_hashes: tuple[str, ...]
     skipped_rule_ids: tuple[str, ...]
     prompt_fragments: tuple[str, ...]
-    allowed_reason_codes: tuple[str, ...]
-    required_evidence_sources: tuple[str, ...]
-    allowed_evidence_sources: tuple[str, ...]
     deterministic_minimum_level: int | None = None
     compiled_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
 
@@ -66,23 +65,38 @@ def compile_constitution(
         "axis": axis_name,
         "scenarios": sorted(scenarios),
         "applied_rule_ids": [rule.rule_id for rule in selected],
+        "category_rule_ids": [rule.rule_id for rule in selected if rule.category_ids],
         "applied_rule_hashes": [rule.rule_hash for rule in selected],
         "skipped_rule_ids": skipped,
         "prompt_fragments": [
             rule.effect.prompt_text for rule in selected if rule.effect.prompt_text is not None
         ],
-        "allowed_reason_codes": sorted(
-            {code for rule in selected for code in rule.allowed_reason_codes}
-        ),
-        "required_evidence_sources": sorted(
-            {source for rule in selected for source in rule.required_evidence_sources}
-        ),
-        "allowed_evidence_sources": sorted(
-            {source for rule in selected for source in rule.allowed_evidence_sources}
-        ),
         "deterministic_minimum_level": max(minimums) if minimums else None,
     }
     compiled_hash = hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
     return CompiledConstitution(**payload, compiled_hash=compiled_hash)
+
+
+def validate_triggered_rule_ids(
+    constitution: CompiledConstitution,
+    triggered_rule_ids: tuple[str, ...],
+) -> None:
+    """Require a unique, non-empty subset of the rules compiled for this panel."""
+
+    if not triggered_rule_ids:
+        raise ContractValidationError("judge must cite at least one triggered rule")
+    if len(set(triggered_rule_ids)) != len(triggered_rule_ids):
+        raise ContractValidationError("judge cited duplicate triggered rule IDs")
+    unknown = sorted(set(triggered_rule_ids).difference(constitution.applied_rule_ids))
+    if unknown:
+        raise ContractValidationError(
+            f"judge cited rules absent from the compiled Constitution: {unknown}"
+        )
+    if constitution.category_rule_ids and not set(triggered_rule_ids).intersection(
+        constitution.category_rule_ids
+    ):
+        raise ContractValidationError(
+            "category verdict must cite at least one category-specific Constitution rule"
+        )

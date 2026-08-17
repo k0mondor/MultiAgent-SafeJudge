@@ -25,7 +25,6 @@ from safejudge.contracts.judging import (
     EnablementScores,
     EvaluationResult,
     EvaluationSpec,
-    EvidenceRef,
     IntentAnalysis,
     JudgeAxis,
     JudgeCallTrace,
@@ -40,8 +39,6 @@ from safejudge.contracts.judging import (
 from safejudge.contracts.jury import (
     JuryIdentity,
     JuryPlan,
-    JurySeat,
-    JurySeatIdentity,
 )
 from safejudge.contracts.model import (
     InputModality,
@@ -66,7 +63,6 @@ __all__ = [
     "EnablementScores",
     "EvaluationResult",
     "EvaluationSpec",
-    "EvidenceRef",
     "InputModality",
     "IntentAnalysis",
     "InvocationContext",
@@ -79,8 +75,6 @@ __all__ = [
     "JudgeVerdict",
     "JuryIdentity",
     "JuryPlan",
-    "JurySeat",
-    "JurySeatIdentity",
     "MediaRef",
     "MediaType",
     "ModalityCombination",

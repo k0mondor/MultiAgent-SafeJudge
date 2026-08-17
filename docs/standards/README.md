@@ -74,7 +74,11 @@ The Category Router sees the frozen target response and may return zero, one, or
 leaf IDs. IDs are rejected unless they are selectable and routing-enabled. Every selected
 leaf is bound to its mapped Constitution, compiled with that `category_id`, judged by an
 independent compliance/enablement panel, and persisted under `category_results`.
+Each panel verdict must also return non-empty `triggered_rule_ids`; the runtime rejects
+unknown rule IDs and requires at least one rule specific to the routed leaf category.
 `EvaluationSpec` and the batch manifest include the taxonomy identity and hash; each final
 result includes the Category Router hash and selected IDs. Zero matches produces
 `not_evaluated`; ambiguous grounding produces `review_required`. The router never silently
-selects a parent or fallback class.
+selects a parent or fallback class. The batch manifest summarizes leaf hit counts,
+per-leaf final-level counts, multi-label samples, zero-match samples, and category results
+requiring review.

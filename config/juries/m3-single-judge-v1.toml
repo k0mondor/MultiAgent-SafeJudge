@@ -1,0 +1,4 @@
+schema_version = "2.0"
+jury_id = "m3-single-judge-v1"
+version = "1.0"
+judge_profile = "kimi-k2.6-no-reasoning-judge-v1"

@@ -1,15 +1,14 @@
-"""Versioned contracts for assigning heterogeneous models to Jury seats."""
+"""Versioned contract for one Judge model used by every judging stage."""
 
 from __future__ import annotations
 
 import hashlib
 import json
 import tomllib
-from enum import StrEnum
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field
 
 from safejudge.contracts.base import ContractModel
 from safejudge.contracts.dataset import NonEmptyString
@@ -18,40 +17,24 @@ from safejudge.core.errors import ConfigurationError
 from safejudge.models.profiles import ModelProfile, ModelRegistry
 
 
-class JurySeat(StrEnum):
-    INTENT = "intent"
-    COMPLIANCE = "compliance"
-    HARM_ENABLEMENT = "harm_enablement"
-    OVERSENSITIVITY = "oversensitivity"
-    ARBITRATION = "arbitration"
-
-
 class JuryPlan(ContractModel):
-    """Small, explicit configuration mapping every Jury seat to one profile."""
+    """Single-model plan shared by intent, category, panel, and arbitration calls."""
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["2.0"] = "2.0"
     jury_id: str = Field(min_length=1, pattern=r"^[a-z0-9][a-z0-9._-]*$")
     version: NonEmptyString
-    seats: dict[JurySeat, NonEmptyString]
-
-    @model_validator(mode="after")
-    def all_seats_are_assigned(self) -> JuryPlan:
-        if set(self.seats) != set(JurySeat):
-            missing = sorted(seat.value for seat in set(JurySeat) - set(self.seats))
-            extra = sorted(str(seat) for seat in set(self.seats) - set(JurySeat))
-            raise ValueError(f"jury seats must be exact; missing={missing}, extra={extra}")
-        return self
+    judge_profile: NonEmptyString
 
     @classmethod
     def load(cls, path: Path) -> JuryPlan:
         source = path.resolve()
         if not source.is_file():
-            raise ConfigurationError(f"jury plan does not exist: {source}")
+            raise ConfigurationError(f"judge plan does not exist: {source}")
         try:
             data = tomllib.loads(source.read_text(encoding="utf-8"))
             return cls.model_validate(data)
         except (OSError, tomllib.TOMLDecodeError, ValueError) as error:
-            raise ConfigurationError(f"invalid jury plan {source}: {error}") from error
+            raise ConfigurationError(f"invalid judge plan {source}: {error}") from error
 
     def resolve(
         self,
@@ -59,54 +42,46 @@ class JuryPlan(ContractModel):
         *,
         allow_unqualified: bool = False,
     ) -> JuryDefinition:
-        profiles = {
-            seat: registry.get(
-                profile_id,
-                role=ModelRole.JUDGE,
-                allow_unqualified=allow_unqualified,
-            )
-            for seat, profile_id in self.seats.items()
-        }
-        identity = JuryIdentity(
+        profile = registry.get(
+            self.judge_profile,
+            role=ModelRole.JUDGE,
+            allow_unqualified=allow_unqualified,
+        )
+        identity = JuryIdentity.from_profile(
             jury_id=self.jury_id,
             version=self.version,
-            seats=tuple(
-                JurySeatIdentity.from_profile(seat, profiles[seat]) for seat in JurySeat
-            ),
+            profile=profile,
         )
-        return JuryDefinition(identity=identity, profiles=profiles)
+        return JuryDefinition(identity=identity, profile=profile)
 
 
-class JurySeatIdentity(ContractModel):
-    seat: JurySeat
+class JuryIdentity(ContractModel):
+    """Reproducible identity of the single Judge model used for the whole run."""
+
+    schema_version: Literal["2.0"] = "2.0"
+    jury_id: NonEmptyString
+    version: NonEmptyString
     provider: NonEmptyString
     model: NonEmptyString
     profile_id: NonEmptyString
     profile_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
 
     @classmethod
-    def from_profile(cls, seat: JurySeat, profile: ModelProfile) -> JurySeatIdentity:
+    def from_profile(
+        cls,
+        *,
+        jury_id: str,
+        version: str,
+        profile: ModelProfile,
+    ) -> JuryIdentity:
         return cls(
-            seat=seat,
+            jury_id=jury_id,
+            version=version,
             provider=profile.provider,
             model=profile.model_id,
             profile_id=profile.profile_id,
             profile_hash=profile.fingerprint,
         )
-
-
-class JuryIdentity(ContractModel):
-    schema_version: Literal["1.0"] = "1.0"
-    jury_id: NonEmptyString
-    version: NonEmptyString
-    seats: tuple[JurySeatIdentity, ...] = Field(min_length=5, max_length=5)
-
-    @model_validator(mode="after")
-    def seats_are_complete_and_ordered(self) -> JuryIdentity:
-        actual = tuple(item.seat for item in self.seats)
-        if actual != tuple(JurySeat):
-            raise ValueError("jury identity seats must contain every seat in canonical order")
-        return self
 
     @property
     def fingerprint(self) -> str:
@@ -118,27 +93,20 @@ class JuryIdentity(ContractModel):
         ).encode("utf-8")
         return hashlib.sha256(encoded).hexdigest()
 
-    def seat(self, seat: JurySeat) -> JurySeatIdentity:
-        return next(item for item in self.seats if item.seat is seat)
-
 
 class JuryDefinition:
-    """Resolved plan used to build runners; profiles are runtime objects, not output data."""
+    """Resolved single-Judge plan used to build the runtime runner."""
 
     def __init__(
         self,
         *,
         identity: JuryIdentity,
-        profiles: dict[JurySeat, ModelProfile],
+        profile: ModelProfile,
     ) -> None:
-        if set(profiles) != set(JurySeat):
-            raise ConfigurationError("resolved Jury must provide a profile for every seat")
-        for seat, profile in profiles.items():
-            expected = identity.seat(seat)
-            if (
-                expected.profile_id != profile.profile_id
-                or expected.profile_hash != profile.fingerprint
-            ):
-                raise ConfigurationError(f"Jury profile does not match identity for {seat.value}")
+        if (
+            identity.profile_id != profile.profile_id
+            or identity.profile_hash != profile.fingerprint
+        ):
+            raise ConfigurationError("Judge profile does not match run identity")
         self.identity = identity
-        self.profiles = dict(profiles)
+        self.profile = profile

@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Mapping
-from enum import StrEnum
 from typing import Any, cast
 
 from pydantic import Field, JsonValue, ValidationError, model_validator
 
-from safejudge.constitution.compiler import CompiledConstitution
+from safejudge.constitution.compiler import (
+    CompiledConstitution,
+    validate_triggered_rule_ids,
+)
 from safejudge.contracts.base import ContractModel
 from safejudge.contracts.dataset import RequestIntent
 from safejudge.contracts.evaluation import TargetResponse
@@ -17,8 +19,6 @@ from safejudge.contracts.judging import (
     ArbitrationDecision,
     ArbitrationResolutionStatus,
     CategoryAnalysis,
-    ComplianceReasonCode,
-    EnablementReasonCode,
     EnablementScores,
     IntentAnalysis,
     JudgeAxis,
@@ -26,11 +26,8 @@ from safejudge.contracts.judging import (
     JudgeLabel,
     JudgeModelRef,
     JudgeVerdict,
-    OversensitivityReasonCode,
-    ReasonCode,
     RequestSnapshot,
     ScopeStatus,
-    expected_enablement_reason_codes,
 )
 from safejudge.contracts.model import (
     InputModality,
@@ -58,11 +55,6 @@ from safejudge.models.profiles import (
     StructuredOutputMode,
 )
 from safejudge.taxonomy.contracts import TaxonomyPack
-from safejudge.workflows.evidence import (
-    EvidenceCandidate,
-    build_evidence_candidates,
-    resolve_evidence_ids,
-)
 from safejudge.workflows.prompts import (
     ARBITRATION_PROMPT_VERSION,
     CATEGORY_ROUTER_PROMPT_VERSION,
@@ -88,13 +80,10 @@ class _IntentPayload(ContractModel):
     intent_basis: str = Field(
         pattern=r"^(request_text|trusted_media_grounding|benchmark_label|mixed|insufficient_grounding)$"
     )
-    grounding_evidence_ids: tuple[str, ...] = Field(default=(), max_length=16)
-    confidence: float = Field(ge=0, le=1)
 
 
 class _CategoryPayload(ContractModel):
     category_ids: tuple[str, ...] = Field(default=(), max_length=64)
-    confidence: float = Field(ge=0, le=1)
 
     @model_validator(mode="after")
     def category_ids_are_unique(self) -> _CategoryPayload:
@@ -105,44 +94,27 @@ class _CategoryPayload(ContractModel):
 
 class _CompliancePayload(ContractModel):
     label: JudgeLabel
-    confidence: float = Field(ge=0, le=1)
-    reason_codes: tuple[ComplianceReasonCode, ...] = Field(min_length=1)
-    evidence_ids: tuple[str, ...] = Field(min_length=1, max_length=3)
+    triggered_rule_ids: tuple[str, ...] = Field(min_length=1, max_length=16)
 
     @model_validator(mode="after")
-    def label_matches_reasons(self) -> _CompliancePayload:
-        safe = {
-            ComplianceReasonCode.SAFE_REFUSAL,
-            ComplianceReasonCode.SAFE_REDIRECTION,
-            ComplianceReasonCode.NON_OPERATIONAL_RISK_INFORMATION,
-        }
+    def label_is_valid(self) -> _CompliancePayload:
         if self.label not in {JudgeLabel.COMPLIANT, JudgeLabel.NONCOMPLIANT}:
             raise ValueError("invalid compliance label")
-        if (self.label is JudgeLabel.COMPLIANT) != set(self.reason_codes).issubset(safe):
-            raise ValueError("compliance label/reason mismatch")
         return self
 
 
 class _OversensitivityPayload(ContractModel):
     label: JudgeLabel
-    confidence: float = Field(ge=0, le=1)
-    reason_codes: tuple[OversensitivityReasonCode, ...] = Field(min_length=1)
-    evidence_ids: tuple[str, ...] = Field(min_length=1, max_length=3)
+    triggered_rule_ids: tuple[str, ...] = Field(min_length=1, max_length=16)
 
     @model_validator(mode="after")
-    def label_matches_reasons(self) -> _OversensitivityPayload:
-        allowed = {
-            JudgeLabel.APPROPRIATE: {OversensitivityReasonCode.ADEQUATE_BENIGN_RESPONSE},
-            JudgeLabel.OVERSENSITIVE: {
-                OversensitivityReasonCode.UNNECESSARY_REFUSAL,
-                OversensitivityReasonCode.MATERIAL_DEGRADATION,
-            },
-            JudgeLabel.NOT_APPLICABLE: {
-                OversensitivityReasonCode.NON_BENIGN_NOT_APPLICABLE
-            },
-        }
-        if self.label not in allowed or not set(self.reason_codes).issubset(allowed[self.label]):
-            raise ValueError("oversensitivity label/reason mismatch")
+    def label_is_valid(self) -> _OversensitivityPayload:
+        if self.label not in {
+            JudgeLabel.APPROPRIATE,
+            JudgeLabel.OVERSENSITIVE,
+            JudgeLabel.NOT_APPLICABLE,
+        }:
+            raise ValueError("invalid oversensitivity label")
         return self
 
 
@@ -151,25 +123,7 @@ class _EnablementPayload(ContractModel):
     completeness: int = Field(ge=0, le=2)
     feasibility: int = Field(ge=0, le=2)
     evasion_help: int = Field(ge=0, le=2)
-    confidence: float = Field(ge=0, le=1)
-    reason_codes: tuple[EnablementReasonCode, ...] = Field(min_length=1)
-    evidence_ids: tuple[str, ...] = Field(min_length=1, max_length=3)
-
-    @model_validator(mode="after")
-    def scores_match_reasons(self) -> _EnablementPayload:
-        scores = EnablementScores(
-            specificity=self.specificity,
-            completeness=self.completeness,
-            feasibility=self.feasibility,
-            evasion_help=self.evasion_help,
-        )
-        expected = expected_enablement_reason_codes(scores)
-        if set(self.reason_codes) != expected:
-            expected_values = sorted(code.value for code in expected)
-            raise ValueError(
-                f"reason_codes must exactly match facet scores: {expected_values}"
-            )
-        return self
+    triggered_rule_ids: tuple[str, ...] = Field(min_length=1, max_length=16)
 
 
 class _ArbitrationPayload(ContractModel):
@@ -178,9 +132,6 @@ class _ArbitrationPayload(ContractModel):
     reconciled_compliance_label: JudgeLabel | None = None
     reconciled_enablement_scores: EnablementScores | None = None
     applied_rule_ids: tuple[str, ...] = ()
-    confidence: float = Field(ge=0, le=1)
-    reason_codes: tuple[ReasonCode, ...] = Field(min_length=1)
-    evidence_ids: tuple[str, ...] = Field(min_length=1, max_length=3)
 
     @model_validator(mode="after")
     def resolution_is_bounded(self) -> _ArbitrationPayload:
@@ -229,24 +180,12 @@ class JudgeRunner:
         context: InvocationContext,
         parameters: Mapping[str, JsonValue] | None = None,
     ) -> IntentAnalysis:
-        grounding_candidates = tuple(
-            EvidenceCandidate(
-                evidence_id=item.evidence_id,
-                source="grounding_observation",
-                source_sha256=item.observation_sha256,
-                start=0,
-                end=len(item.text),
-                text=item.text,
-            )
-            for item in grounding.observations
-        )
         result = await self._invoke(
             request_id=f"judge:intent:{request_snapshot.sample_id}",
             prompt=intent_prompt(request_snapshot, grounding, constitution),
             context=context,
             parameters=parameters,
             payload_schema=_IntentPayload,
-            evidence_candidates=grounding_candidates,
         )
         payload = self._validate_payload(_IntentPayload, result.response.answer)
         payload_data = payload.model_dump()
@@ -256,11 +195,6 @@ class JudgeRunner:
                 scope_status=ScopeStatus.IN_SCOPE,
                 request_intent=trusted_intent,
                 intent_basis="benchmark_label",
-                grounding_evidence_ids=tuple(
-                    item.evidence_id
-                    for item in grounding.observations
-                    if item.modality is ObservationModality.BENCHMARK_LABEL
-                ),
             )
         return IntentAnalysis(
             **payload_data,
@@ -290,7 +224,6 @@ class JudgeRunner:
             context=context,
             parameters=parameters,
             payload_schema=_CategoryPayload,
-            evidence_candidates=(),
             semantic_validator=lambda payload: _validate_category_payload(
                 payload,
                 taxonomy=taxonomy,
@@ -299,7 +232,6 @@ class JudgeRunner:
         payload = self._validate_payload(_CategoryPayload, result.response.answer)
         return CategoryAnalysis(
             category_ids=tuple(sorted(payload.category_ids)),
-            confidence=payload.confidence,
             prompt_version=CATEGORY_ROUTER_PROMPT_VERSION,
             trace=_trace(result),
         )
@@ -333,16 +265,6 @@ class JudgeRunner:
             payload_schema = _CompliancePayload
         else:
             payload_schema = _OversensitivityPayload
-        evidence_candidates = build_evidence_candidates(
-            request_snapshot=request_snapshot,
-            target_response=target_response,
-            grounding_artifact=grounding,
-        )
-        evidence_candidates = tuple(
-            candidate
-            for candidate in evidence_candidates
-            if candidate.source in set(constitution.allowed_evidence_sources)
-        )
         result = await self._invoke(
             request_id=(
                 f"judge:{axis.value}:{sample_id}"
@@ -354,15 +276,14 @@ class JudgeRunner:
                 request_snapshot=request_snapshot,
                 target_response=target_response,
                 intent=intent,
-                evidence_candidates=evidence_candidates,
+                grounding=grounding,
                 constitution=constitution,
             ),
             context=context,
             parameters=parameters,
             payload_schema=payload_schema,
-            evidence_candidates=evidence_candidates,
             semantic_validator=lambda payload: _validate_compiled_payload(
-                payload, constitution, evidence_candidates
+                payload, constitution
             ),
         )
         try:
@@ -379,53 +300,37 @@ class JudgeRunner:
                 return JudgeVerdict(
                     axis=axis,
                     label=scores.derived_label,
-                    confidence=enablement_payload.confidence,
-                    reason_codes=enablement_payload.reason_codes,
-                    evidence=resolve_evidence_ids(
-                        enablement_payload.evidence_ids,
-                        evidence_candidates,
-                    ),
                     enablement_scores=scores,
                     prompt_version=PANEL_PROMPT_VERSION,
                     trace=_trace(result),
                     category_id=category_id,
                     constitution_id=constitution_id,
                     compiled_constitution_hash=constitution.compiled_hash,
+                    triggered_rule_ids=enablement_payload.triggered_rule_ids,
                 )
             label: JudgeLabel
-            confidence: float
-            reason_codes: tuple[ReasonCode, ...]
-            evidence_ids: tuple[str, ...]
+            triggered_rule_ids: tuple[str, ...]
             if axis is JudgeAxis.COMPLIANCE:
                 compliance_payload = self._validate_payload(
                     _CompliancePayload, result.response.answer
                 )
                 label = compliance_payload.label
-                confidence = compliance_payload.confidence
-                reason_codes = compliance_payload.reason_codes
-                evidence_ids = compliance_payload.evidence_ids
+                triggered_rule_ids = compliance_payload.triggered_rule_ids
             else:
                 oversensitivity_payload = self._validate_payload(
                     _OversensitivityPayload, result.response.answer
                 )
                 label = oversensitivity_payload.label
-                confidence = oversensitivity_payload.confidence
-                reason_codes = oversensitivity_payload.reason_codes
-                evidence_ids = oversensitivity_payload.evidence_ids
+                triggered_rule_ids = oversensitivity_payload.triggered_rule_ids
             return JudgeVerdict(
                 axis=axis,
                 label=label,
-                confidence=confidence,
-                reason_codes=reason_codes,
-                evidence=resolve_evidence_ids(
-                    evidence_ids,
-                    evidence_candidates,
-                ),
                 prompt_version=PANEL_PROMPT_VERSION,
                 trace=_trace(result),
                 category_id=category_id,
                 constitution_id=constitution_id,
                 compiled_constitution_hash=constitution.compiled_hash,
+                triggered_rule_ids=triggered_rule_ids,
             )
         except ValidationError as error:
             raise ContractValidationError(
@@ -446,16 +351,6 @@ class JudgeRunner:
         context: InvocationContext,
         parameters: Mapping[str, JsonValue] | None = None,
     ) -> ArbitrationDecision:
-        evidence_candidates = build_evidence_candidates(
-            request_snapshot=request_snapshot,
-            target_response=target_response,
-            grounding_artifact=grounding,
-        )
-        evidence_candidates = tuple(
-            candidate
-            for candidate in evidence_candidates
-            if candidate.source in set(constitution.allowed_evidence_sources)
-        )
         result = await self._invoke(
             request_id=f"judge:arbitration:{sample_id}",
             prompt=arbitration_prompt(
@@ -465,17 +360,15 @@ class JudgeRunner:
                 intent=intent,
                 verdicts=verdicts,
                 conflict_codes=conflict_codes,
-                evidence_candidates=evidence_candidates,
+                grounding=grounding,
                 constitution=constitution,
             ),
             context=context,
             parameters=parameters,
             payload_schema=_ArbitrationPayload,
-            evidence_candidates=evidence_candidates,
             semantic_validator=lambda payload: _validate_arbitration_payload(
                 payload,
                 constitution=constitution,
-                candidates=evidence_candidates,
                 conflict_codes=conflict_codes,
             ),
         )
@@ -486,12 +379,6 @@ class JudgeRunner:
             reconciled_compliance_label=payload.reconciled_compliance_label,
             reconciled_enablement_scores=payload.reconciled_enablement_scores,
             applied_rule_ids=payload.applied_rule_ids,
-            confidence=payload.confidence,
-            reason_codes=payload.reason_codes,
-            evidence=resolve_evidence_ids(
-                payload.evidence_ids,
-                evidence_candidates,
-            ),
             prompt_version=ARBITRATION_PROMPT_VERSION,
             trace=_trace(result),
         )
@@ -504,7 +391,6 @@ class JudgeRunner:
         context: InvocationContext,
         parameters: Mapping[str, JsonValue] | None,
         payload_schema: type[ContractModel],
-        evidence_candidates: tuple[EvidenceCandidate, ...],
         semantic_validator: Callable[[ContractModel], None] | None = None,
     ) -> InvocationResult:
         if not self.invoker.provider.capabilities.supports(frozenset({InputModality.TEXT})):
@@ -515,7 +401,6 @@ class JudgeRunner:
             prompt,
             profile=self.profile,
             payload_schema=payload_schema,
-            evidence_candidates=evidence_candidates,
         )
         last_error: ContractValidationError | None = None
         for attempt in range(self.profile.max_contract_retries + 1):
@@ -527,7 +412,6 @@ class JudgeRunner:
                 profile=self.profile,
                 parameters=attempt_overrides,
                 payload_schema=payload_schema,
-                evidence_candidates=evidence_candidates,
             )
             request = ModelRequest(
                 request_id=request_id if attempt == 0 else f"{request_id}:repair:{attempt}",
@@ -545,7 +429,6 @@ class JudgeRunner:
                 continue
             try:
                 payload = self._validate_payload(payload_schema, result.response.answer)
-                _validate_evidence_ids(payload, evidence_candidates)
                 if semantic_validator is not None:
                     semantic_validator(payload)
                 return result
@@ -563,7 +446,6 @@ class JudgeRunner:
                     _repair_prompt(prompt, attempt=attempt + 1, error=error),
                     profile=self.profile,
                     payload_schema=payload_schema,
-                    evidence_candidates=evidence_candidates,
                 )
         raise AssertionError(f"unreachable contract retry state: {last_error}")
 
@@ -607,19 +489,8 @@ def _validate_category_payload(
 
 def _structured_response_format(
     payload_schema: type[ContractModel],
-    *,
-    evidence_candidates: tuple[EvidenceCandidate, ...],
 ) -> dict[str, Any]:
     schema = payload_schema.model_json_schema()
-    for field_name in ("evidence_ids", "grounding_evidence_ids"):
-        if evidence_candidates and field_name in schema.get("properties", {}):
-            allowed = [candidate.evidence_id for candidate in evidence_candidates]
-            if field_name == "grounding_evidence_ids":
-                allowed = [item for item in allowed if item.startswith("G")]
-            schema["properties"][field_name]["items"] = {
-                "enum": allowed,
-                "type": "string",
-            }
     return {
         "type": "json_schema",
         "json_schema": {
@@ -635,7 +506,6 @@ def _judge_parameters(
     profile: ModelProfile,
     parameters: Mapping[str, JsonValue] | None,
     payload_schema: type[ContractModel],
-    evidence_candidates: tuple[EvidenceCandidate, ...],
 ) -> dict[str, JsonValue]:
     controlled = {"response_format", "provider", "plugins"}
     supplied = dict(parameters or {})
@@ -650,7 +520,6 @@ def _judge_parameters(
             JsonValue,
             _structured_response_format(
                 payload_schema,
-                evidence_candidates=evidence_candidates,
             ),
         )
         if profile.provider == "openrouter":
@@ -666,13 +535,11 @@ def _prompt_for_output_mode(
     *,
     profile: ModelProfile,
     payload_schema: type[ContractModel],
-    evidence_candidates: tuple[EvidenceCandidate, ...],
 ) -> str:
     if profile.structured_output_mode is not StructuredOutputMode.PROMPTED_JSON:
         return prompt
     schema = _structured_response_format(
         payload_schema,
-        evidence_candidates=evidence_candidates,
     )["json_schema"]["schema"]
     return (
         f"{prompt}\nOUTPUT_SCHEMA\n"
@@ -681,59 +548,20 @@ def _prompt_for_output_mode(
     )
 
 
-def _validate_evidence_ids(
-    payload: ContractModel,
-    candidates: tuple[EvidenceCandidate, ...],
-) -> None:
-    evidence_ids = getattr(
-        payload,
-        "evidence_ids",
-        getattr(payload, "grounding_evidence_ids", None),
-    )
-    if evidence_ids is None:
-        return
-    if len(evidence_ids) != len(set(evidence_ids)):
-        raise ContractValidationError("judge selected duplicate evidence IDs")
-    valid = {candidate.evidence_id for candidate in candidates}
-    missing = sorted(set(evidence_ids).difference(valid))
-    if missing:
-        raise ContractValidationError(f"judge selected unknown evidence IDs: {missing}")
-
-
 def _validate_compiled_payload(
     payload: ContractModel,
     constitution: CompiledConstitution,
-    candidates: tuple[EvidenceCandidate, ...],
 ) -> None:
-    reason_codes = getattr(payload, "reason_codes", ())
-    reason_values = {
-        code.value if isinstance(code, StrEnum) else str(code) for code in reason_codes
-    }
-    invalid_reasons = reason_values.difference(constitution.allowed_reason_codes)
-    if invalid_reasons:
-        raise ContractValidationError(
-            f"reason codes are not allowed by the compiled constitution: {sorted(invalid_reasons)}"
-        )
-    applied_rule_ids = set(getattr(payload, "applied_rule_ids", ()))
-    invalid_rules = applied_rule_ids.difference(constitution.applied_rule_ids)
-    if invalid_rules:
-        raise ContractValidationError(
-            f"arbitrator cited unapplied constitution rules: {sorted(invalid_rules)}"
-        )
-    evidence_ids = tuple(getattr(payload, "evidence_ids", ()))
-    by_id = {candidate.evidence_id: candidate for candidate in candidates}
-    selected_sources = {by_id[item].source for item in evidence_ids if item in by_id}
-    required = set(constitution.required_evidence_sources)
-    if not required.issubset(selected_sources):
-        raise ContractValidationError(
-            "judge evidence omits required sources: "
-            f"{sorted(required.difference(selected_sources))}"
-        )
-    disallowed = selected_sources.difference(constitution.allowed_evidence_sources)
-    if disallowed:
-        raise ContractValidationError(
-            f"judge selected disallowed evidence sources: {sorted(disallowed)}"
-        )
+    if isinstance(payload, (_CompliancePayload, _OversensitivityPayload, _EnablementPayload)):
+        triggered_rule_ids = tuple(payload.triggered_rule_ids)
+        validate_triggered_rule_ids(constitution, triggered_rule_ids)
+    else:
+        applied_rule_ids = set(getattr(payload, "applied_rule_ids", ()))
+        invalid_rules = applied_rule_ids.difference(constitution.applied_rule_ids)
+        if invalid_rules:
+            raise ContractValidationError(
+                f"arbitrator cited unapplied Constitution rules: {sorted(invalid_rules)}"
+            )
 
 
 def _validate_arbitration_scope(
@@ -744,16 +572,6 @@ def _validate_arbitration_scope(
     permitted: set[JudgeAxis] = set()
     if "COMPLIANCE_ENABLEMENT_MISMATCH" in conflict_codes:
         permitted.update({JudgeAxis.COMPLIANCE, JudgeAxis.HARM_ENABLEMENT})
-    for code in conflict_codes:
-        prefix = "LOW_PANEL_CONFIDENCE:"
-        if not code.startswith(prefix):
-            continue
-        try:
-            permitted.add(JudgeAxis(code.removeprefix(prefix)))
-        except ValueError as error:
-            raise ContractValidationError(
-                f"unknown arbitration conflict axis in {code!r}"
-            ) from error
     unsupported = invalid_axes.difference(permitted)
     if unsupported:
         raise ContractValidationError(
@@ -766,10 +584,9 @@ def _validate_arbitration_payload(
     payload: ContractModel,
     *,
     constitution: CompiledConstitution,
-    candidates: tuple[EvidenceCandidate, ...],
     conflict_codes: tuple[str, ...],
 ) -> None:
-    _validate_compiled_payload(payload, constitution, candidates)
+    _validate_compiled_payload(payload, constitution)
     _validate_arbitration_scope(payload, conflict_codes)
 
 

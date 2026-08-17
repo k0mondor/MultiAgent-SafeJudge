@@ -17,7 +17,6 @@ from safejudge.contracts.dataset import DatasetSplit, MediaType
 from safejudge.contracts.jury import (
     JuryDefinition,
     JuryPlan,
-    JurySeat,
 )
 from safejudge.contracts.model import (
     InputModality,
@@ -174,7 +173,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--jury-plan",
         required=True,
         type=Path,
-        help="TOML plan assigning an explicit model profile to every Jury seat",
+        help="TOML plan selecting the one Judge profile used by every judging stage",
     )
     evaluate_run_parser.add_argument(
         "--model-registry",
@@ -441,7 +440,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 run_evaluation_batch(
                     **common,
                     jury_definition=definition,
-                    jury_providers=_jury_providers(
+                    judge_provider=_jury_provider(
                         definition,
                         artifact_root=args.artifact_root.resolve(),
                         judge_env_file=args.judge_env_file,
@@ -462,10 +461,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "node_ledger": str(evaluation_result.node_ledger_path),
                     "jury_id": evaluation_result.manifest.jury.jury_id,
                     "jury_hash": evaluation_result.manifest.jury_hash,
-                    "jury_seats": {
-                        item.seat.value: item.model
-                        for item in evaluation_result.manifest.jury.seats
-                    },
+                    "judge_model": evaluation_result.manifest.jury.model,
                     "samples": evaluation_result.manifest.sample_count,
                     "input_samples": evaluation_result.manifest.input_sample_count,
                     "batch_failures": evaluation_result.manifest.failure_count,
@@ -480,6 +476,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "cache_misses": evaluation_result.manifest.cache_miss_count,
                     "billed_cost_usd": str(evaluation_result.manifest.billed_cost_usd),
                     "levels": evaluation_result.manifest.compliance_level_counts,
+                    "category_hits": evaluation_result.manifest.category_hit_counts,
+                    "category_levels": evaluation_result.manifest.category_level_counts,
+                    "multi_label_samples": (
+                        evaluation_result.manifest.multi_label_sample_count
+                    ),
+                    "zero_category_samples": (
+                        evaluation_result.manifest.zero_category_sample_count
+                    ),
                     "taxonomy_id": evaluation_result.manifest.taxonomy_id,
                     "standard_id": evaluation_result.manifest.standard_id,
                 },
@@ -616,28 +620,25 @@ def _openrouter_profile_settings(
     )
 
 
-def _jury_providers(
+def _jury_provider(
     definition: JuryDefinition,
     *,
     artifact_root: Path,
     judge_env_file: Path,
-) -> dict[JurySeat, ModelProvider]:
-    providers: dict[JurySeat, ModelProvider] = {}
-    for seat, profile in definition.profiles.items():
-        seat_artifacts = FileArtifactStore(artifact_root / "jury" / seat.value)
-        if profile.provider == "local-openai":
-            providers[seat] = LocalOpenAIProvider(
-                settings=_local_judge_settings(profile, judge_env_file),
-                capabilities=_judge_capabilities(),
-                artifact_store=seat_artifacts,
-            )
-        else:
-            providers[seat] = OpenRouterProvider(
-                settings=_openrouter_profile_settings(profile),
-                capabilities=_judge_capabilities(),
-                artifact_store=seat_artifacts,
-            )
-    return providers
+) -> ModelProvider:
+    profile = definition.profile
+    artifacts = FileArtifactStore(artifact_root / "judge")
+    if profile.provider == "local-openai":
+        return LocalOpenAIProvider(
+            settings=_local_judge_settings(profile, judge_env_file),
+            capabilities=_judge_capabilities(),
+            artifact_store=artifacts,
+        )
+    return OpenRouterProvider(
+        settings=_openrouter_profile_settings(profile),
+        capabilities=_judge_capabilities(),
+        artifact_store=artifacts,
+    )
 
 
 def _target_capabilities(values: list[str] | None) -> ModelCapabilities:

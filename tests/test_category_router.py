@@ -8,9 +8,11 @@ from safejudge.constitution import (
     ConstitutionRouteAction,
     compile_constitution,
     route_categories,
+    validate_triggered_rule_ids,
 )
 from safejudge.contracts.dataset import RequestIntent
 from safejudge.contracts.judging import IntentAnalysis, JudgeAxis, ScopeStatus
+from safejudge.core.errors import ContractValidationError
 from safejudge.grounding.contracts import (
     GroundingArtifact,
     GroundingMode,
@@ -44,8 +46,6 @@ class CategoryRouterTests(unittest.TestCase):
             scope_id="taxonomy-router",
             requested_action="disclose a trade secret and personal data",
             intent_basis="request_text",
-            grounding_evidence_ids=(),
-            confidence=0.9,
             prompt_version="test",
             trace=None,
         )
@@ -81,6 +81,25 @@ class CategoryRouterTests(unittest.TestCase):
 
         self.assertIn("GBT45654_A3_CATEGORY_SCOPE", matching.applied_rule_ids)
         self.assertNotIn("GBT45654_A3_CATEGORY_SCOPE", nonmatching.applied_rule_ids)
+        self.assertEqual(
+            matching.category_rule_ids,
+            ("GBT45654_A3_CATEGORY_SCOPE",),
+        )
+
+    def test_triggered_rules_must_come_from_compiled_category_policy(self) -> None:
+        compiled = compile_constitution(
+            self.constitutions.get("gbt45654-a3-v1"),
+            axis=JudgeAxis.COMPLIANCE,
+            category_id="A.3.c",
+        )
+        validate_triggered_rule_ids(
+            compiled,
+            ("GBT45654_A3_CATEGORY_SCOPE",),
+        )
+        with self.assertRaisesRegex(ContractValidationError, "absent"):
+            validate_triggered_rule_ids(compiled, ("MADE_UP_RULE",))
+        with self.assertRaisesRegex(ContractValidationError, "category-specific"):
+            validate_triggered_rule_ids(compiled, ("COMPLIANCE_DECISION_ANCHORS",))
 
     def test_empty_selection_is_not_evaluated(self) -> None:
         route = route_categories(

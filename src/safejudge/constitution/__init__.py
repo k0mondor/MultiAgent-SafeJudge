@@ -1,6 +1,10 @@
 """Executable, versioned constitutional evaluation policies."""
 
-from safejudge.constitution.compiler import CompiledConstitution, compile_constitution
+from safejudge.constitution.compiler import (
+    CompiledConstitution,
+    compile_constitution,
+    validate_triggered_rule_ids,
+)
 from safejudge.constitution.contracts import (
     ConstitutionPack,
     ConstitutionRule,
@@ -31,4 +35,5 @@ __all__ = [
     "compile_constitution",
     "route_categories",
     "route_constitution",
+    "validate_triggered_rule_ids",
 ]

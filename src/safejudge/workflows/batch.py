@@ -26,7 +26,6 @@ from safejudge.contracts.judging import AggregateDecision, EvaluationResult
 from safejudge.contracts.jury import (
     JuryDefinition,
     JuryIdentity,
-    JurySeat,
 )
 from safejudge.contracts.model import (
     InvocationContext,
@@ -58,8 +57,8 @@ class EvaluationFileDigest(ContractModel):
 
 
 class EvaluationBatchManifest(ContractModel):
-    manifest_version: Literal["3.0"] = "3.0"
-    evaluation_result_schema_version: Literal["3.0"] = "3.0"
+    manifest_version: Literal["4.0"] = "4.0"
+    evaluation_result_schema_version: Literal["4.0"] = "4.0"
     samples_input: EvaluationFileDigest
     targets_input: EvaluationFileDigest
     output: EvaluationFileDigest
@@ -94,6 +93,12 @@ class EvaluationBatchManifest(ContractModel):
     cache_miss_count: int = Field(ge=0)
     billed_cost_usd: Decimal = Field(ge=0)
     compliance_level_counts: dict[str, int]
+    category_hit_counts: dict[str, int] = Field(default_factory=dict)
+    category_level_counts: dict[str, dict[str, int]] = Field(default_factory=dict)
+    category_result_count: int = Field(default=0, ge=0)
+    multi_label_sample_count: int = Field(default=0, ge=0)
+    zero_category_sample_count: int = Field(default=0, ge=0)
+    category_review_required_count: int = Field(default=0, ge=0)
     created_at: datetime = Field(default_factory=utc_now)
 
 
@@ -106,6 +111,16 @@ class EvaluationBatchResult:
     checkpoint_path: Path
     node_ledger_path: Path
     manifest: EvaluationBatchManifest
+
+
+@dataclass(frozen=True, slots=True)
+class _CategoryManifestStatistics:
+    hit_counts: dict[str, int]
+    level_counts: dict[str, dict[str, int]]
+    result_count: int
+    multi_label_sample_count: int
+    zero_category_sample_count: int
+    review_required_count: int
 
 
 class EvaluationBatchFailure(ContractModel):
@@ -126,7 +141,7 @@ async def run_evaluation_batch(
     node_ledger_path: Path,
     context: InvocationContext,
     jury_definition: JuryDefinition,
-    jury_providers: Mapping[JurySeat, ModelProvider],
+    judge_provider: ModelProvider,
     max_concurrency: int = 3,
     max_sample_concurrency: int = 1,
     max_retries: int = 1,
@@ -165,7 +180,7 @@ async def run_evaluation_batch(
     store = SQLiteModelStore(store_path)
     jury = build_jury_runtime(
         jury_definition,
-        providers=jury_providers,
+        provider=judge_provider,
         store=store,
         policy=InvocationPolicy(
             max_concurrency=max_concurrency,
@@ -265,6 +280,7 @@ async def run_evaluation_batch(
     level_counts = Counter(
         _manifest_level(item.aggregate) for item in results
     )
+    category_stats = _category_manifest_statistics(results)
     run_stats = store.run_stats(context=context, role=ModelRole.JUDGE)
     manifest = EvaluationBatchManifest(
         samples_input=_digest(samples_path),
@@ -299,7 +315,7 @@ async def run_evaluation_batch(
         input_sample_count=len(pairs),
         sample_count=len(results),
         failure_count=len(failures),
-        judge_failure_count=sum(len(item.judge_failures) for item in results),
+        judge_failure_count=sum(_judge_failure_count(item) for item in results),
         arbitration_count=sum(item.arbitration is not None for item in results),
         logical_call_count=run_stats.logical_call_count,
         provider_attempt_count=run_stats.provider_attempt_count,
@@ -310,6 +326,12 @@ async def run_evaluation_batch(
         cache_miss_count=run_stats.cache_miss_count,
         billed_cost_usd=run_stats.billed_cost_usd,
         compliance_level_counts=dict(sorted(level_counts.items())),
+        category_hit_counts=category_stats.hit_counts,
+        category_level_counts=category_stats.level_counts,
+        category_result_count=category_stats.result_count,
+        multi_label_sample_count=category_stats.multi_label_sample_count,
+        zero_category_sample_count=category_stats.zero_category_sample_count,
+        category_review_required_count=category_stats.review_required_count,
     )
     _atomic_write(
         manifest_path,
@@ -412,6 +434,48 @@ def _digest(path: Path) -> EvaluationFileDigest:
 def _manifest_level(aggregate: AggregateDecision) -> str:
     level = aggregate.response_compliance_level
     return aggregate.decision_status.value if level is None else str(level.value)
+
+
+def _category_manifest_statistics(
+    results: list[EvaluationResult],
+) -> _CategoryManifestStatistics:
+    hit_counts: Counter[str] = Counter(
+        category_id
+        for result in results
+        for category_id in result.routed_category_ids
+    )
+    level_counts: dict[str, Counter[str]] = {}
+    for result in results:
+        for category_result in result.category_results:
+            counts = level_counts.setdefault(category_result.category_id, Counter())
+            counts[_manifest_level(category_result.aggregate)] += 1
+    return _CategoryManifestStatistics(
+        hit_counts=dict(sorted(hit_counts.items())),
+        level_counts={
+            category_id: dict(sorted(counts.items()))
+            for category_id, counts in sorted(level_counts.items())
+        },
+        result_count=sum(len(result.category_results) for result in results),
+        multi_label_sample_count=sum(
+            len(result.routed_category_ids) > 1 for result in results
+        ),
+        zero_category_sample_count=sum(
+            result.category_analysis is not None and not result.routed_category_ids
+            for result in results
+        ),
+        review_required_count=sum(
+            category_result.aggregate.decision_status.value == "review_required"
+            for result in results
+            for category_result in result.category_results
+        ),
+    )
+
+
+def _judge_failure_count(result: EvaluationResult) -> int:
+    return len(result.judge_failures) + sum(
+        len(category_result.judge_failures)
+        for category_result in result.category_results
+    )
 
 
 def _atomic_write(path: Path, content: bytes) -> None:

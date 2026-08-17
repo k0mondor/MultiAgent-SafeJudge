@@ -55,4 +55,4 @@ LOCAL_MODEL_API_KEY=
 
 不再维护模拟 Provider 和旧 Schema 的离线测试入口。唯一正式检验是
 [`scripts/run_e2e_acceptance.py`](../scripts/run_e2e_acceptance.py)，覆盖数据读取、媒体校验、
-真实 Target、blind Grounding、异构 Jury、聚合、结果和 manifests。命令见项目 README。
+真实 Target、blind Grounding、单一 Judge 分轴裁判、聚合、结果和 manifests。命令见项目 README。
