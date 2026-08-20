@@ -1,9 +1,27 @@
 # 数据集接入
 
-## 第一阶段选择
+## 当前正式 Testbench
+
+当前项目只使用本机已有的 JailBreakV-28K 作为正式 testbench，不要求下载其他数据集。原有
+MM-SafetyBench、MOSSBench 和 Omni-SafetyBench Adapter 继续保留，用于证明统一数据协议和
+历史实验可复现，但不属于当前必须运行的实验。
+
+本机正式小实验使用固定的 `balanced-5`：5 条样本覆盖 Economic Harm、Unethical Behavior、
+Malware、Privacy Violation 和 Hate Speech，以及 Template、figstep、SD、SD_typo 四种攻击格式。
+运行准备脚本即可从本机上游 CSV 复现选择并验证所有图片：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\prepare_jailbreakv_balanced5.py
+```
+
+生成的 `data/formal/jailbreakv-balanced-5.jsonl`、选择源 CSV 和 Manifest 都受 `.gitignore`
+保护，不会提交原始有害数据或媒体。仓库只提交选择 ID 和校验逻辑。
+
+## 内置 Adapter
 
 | Adapter | 研究作用 | 当前模态组合 | 许可证/限制 |
 | --- | --- | --- | --- |
+| `jailbreakv-28k` | 多模态越狱与回答违规；当前唯一正式 testbench | image+text | 研究安全评估；上游未提供明确许可证文件 |
 | `mm-safetybench` | 图像相关越狱与回答违规 | SD+text、SD_TYPO+text、TYPO+text | CC BY-NC 4.0，研究使用 |
 | `mossbench` | 良性请求的过敏感/错误拒答 | image+text | CC BY-SA 4.0；可作测试集，禁止训练 |
 | `omni-safetybench` | 同一安全种子的跨模态差异 | image+text、audio+text、video+text | CC BY-NC 4.0 |
@@ -27,6 +45,20 @@ Manifest 不记录开发者机器的绝对路径。
 ```powershell
 uv run safejudge data adapters
 ```
+
+## JailBreakV-28K
+
+Adapter 严格读取官方 CSV 字段：
+
+- `jailbreak_query`：实际发送给 Target 的文本请求；
+- `image_path`：相对于 `--media-root` 的图片；
+- `redteam_query`：保留为底层有害目标元数据，不替代实际请求；
+- `policy`：来源风险类别；
+- `format`：越狱攻击类型；
+- `id` 和 `from`：原始样本溯源。
+
+所有样本标记为 harmful request。Adapter 不执行模型推理，也不会把原始 CSV 或媒体复制进
+仓库。官方数据来源为 <https://huggingface.co/datasets/EddyLuo/JailBreakV_28K>。
 
 ## MM-SafetyBench
 

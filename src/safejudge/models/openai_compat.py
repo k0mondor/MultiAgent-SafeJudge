@@ -46,6 +46,16 @@ def build_chat_payload(
             f"model parameters cannot override reserved {reserved_fields_label} fields: "
             f"{reserved}"
         )
+    if any(
+        isinstance(part, ModelTextPart) and part.chat_role is not None
+        for part in request.parts
+    ):
+        return {
+            **request.parameters,
+            "model": model_id,
+            "messages": _role_aware_messages(request),
+            "stream": False,
+        }
     content: list[dict[str, Any]] = []
     for part in request.parts:
         if isinstance(part, ModelTextPart):
@@ -65,6 +75,23 @@ def build_chat_payload(
         "messages": [{"role": "user", "content": content}],
         "stream": False,
     }
+
+
+def _role_aware_messages(request: ModelRequest) -> list[dict[str, Any]]:
+    """Build an explicit text conversation for output-classifier models."""
+
+    messages: list[dict[str, Any]] = []
+    for part in request.parts:
+        if not isinstance(part, ModelTextPart) or part.chat_role is None:
+            raise ConfigurationError(
+                "explicit chat roles require every request part to be role-tagged text"
+            )
+        content = {"type": "text", "text": part.text}
+        if messages and messages[-1]["role"] == part.chat_role:
+            messages[-1]["content"].append(content)
+        else:
+            messages.append({"role": part.chat_role, "content": [content]})
+    return messages
 
 
 def decode_json_object(

@@ -248,6 +248,55 @@ class JudgeVerdict(ContractModel):
         return self
 
 
+class GuardrailVerdict(ContractModel):
+    """Independent per-category result from a specialized safety guardrail."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    label: Literal["not_triggered", "triggered"]
+    native_label: Literal["safe", "unsafe"]
+    native_categories: tuple[NonEmptyString, ...] = ()
+    category_id: NonEmptyString
+    constitution_id: NonEmptyString
+    compiled_constitution_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    triggered_rule_ids: tuple[NonEmptyString, ...] = ()
+    policy_id: NonEmptyString
+    policy_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    prompt_version: NonEmptyString
+    trace: JudgeCallTrace
+
+    @model_validator(mode="after")
+    def trigger_fields_are_consistent(self) -> GuardrailVerdict:
+        if len(set(self.native_categories)) != len(self.native_categories):
+            raise ValueError("native guardrail categories must be unique")
+        if len(set(self.triggered_rule_ids)) != len(self.triggered_rule_ids):
+            raise ValueError("guardrail triggered_rule_ids must be unique")
+        if self.native_label == "safe" and self.native_categories:
+            raise ValueError("safe native guardrail result cannot include categories")
+        if self.native_label == "unsafe" and not self.native_categories:
+            raise ValueError("unsafe native guardrail result requires categories")
+        if self.label == "triggered":
+            if self.native_label != "unsafe" or not self.triggered_rule_ids:
+                raise ValueError(
+                    "triggered guardrail result requires unsafe native output and rules"
+                )
+        elif self.triggered_rule_ids:
+            raise ValueError("not_triggered guardrail result cannot cite triggered rules")
+        return self
+
+
+class GuardrailExecutionFailure(ContractModel):
+    """Auditable guardrail failure that does not replace the main Judge result."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    error_type: NonEmptyString
+    error_kind: str | None = None
+    message: NonEmptyString = Field(max_length=1_200)
+    request_id: NonEmptyString
+    raw_artifact: ArtifactRef | None = None
+    category_id: NonEmptyString
+    constitution_id: NonEmptyString
+
+
 class JudgeExecutionFailure(ContractModel):
     """Auditable failure of one isolated panel without aborting its sample or batch."""
 
@@ -347,6 +396,8 @@ class CategoryEvaluationResult(ContractModel):
     constitution_id: NonEmptyString
     verdicts: tuple[JudgeVerdict, ...] = Field(max_length=3)
     judge_failures: tuple[JudgeExecutionFailure, ...] = Field(default=(), max_length=3)
+    guardrail_verdict: GuardrailVerdict | None = None
+    guardrail_failure: GuardrailExecutionFailure | None = None
     aggregate: AggregateDecision
 
     @model_validator(mode="after")
@@ -367,6 +418,18 @@ class CategoryEvaluationResult(ContractModel):
             raise ValueError("category panel must cover compliance and harm_enablement")
         if failed_axes and self.aggregate.decision_status is not DecisionStatus.REVIEW_REQUIRED:
             raise ValueError("category judge failure requires review")
+        if self.guardrail_verdict is not None and (
+            self.guardrail_verdict.category_id != self.category_id
+            or self.guardrail_verdict.constitution_id != self.constitution_id
+        ):
+            raise ValueError("guardrail verdict belongs to a different category")
+        if self.guardrail_failure is not None and (
+            self.guardrail_failure.category_id != self.category_id
+            or self.guardrail_failure.constitution_id != self.constitution_id
+        ):
+            raise ValueError("guardrail failure belongs to a different category")
+        if self.guardrail_verdict is not None and self.guardrail_failure is not None:
+            raise ValueError("guardrail cannot both succeed and fail for one category")
         return self
 
 

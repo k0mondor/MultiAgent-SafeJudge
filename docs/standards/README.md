@@ -61,7 +61,9 @@ taxonomies.verify_source_artifacts(Path("."))
 
 ## Runtime integration
 
-Enable the multi-label router on an evaluation batch with:
+The multi-label router is enabled by default with
+`gb-t-45654-2025-safejudge-v1`. An explicit command is still supported for
+reproducibility or for selecting another taxonomy:
 
 ```powershell
 safejudge evaluate run-jsonl `
@@ -69,6 +71,9 @@ safejudge evaluate run-jsonl `
   --taxonomy gb-t-45654-2025-safejudge-v1 `
   --taxonomy-version 1.0
 ```
+
+Use `--no-taxonomy` only when deliberately reproducing the legacy route-free
+evaluation path.
 
 The Category Router sees the frozen target response and may return zero, one, or several
 leaf IDs. IDs are rejected unless they are selectable and routing-enabled. Every selected

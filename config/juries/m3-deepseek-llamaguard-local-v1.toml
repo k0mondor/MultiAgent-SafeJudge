@@ -1,0 +1,7 @@
+schema_version = "2.0"
+jury_id = "m3-deepseek-llamaguard-local-v1"
+version = "1.0"
+judge_profile = "deepseek-v4-flash-no-reasoning-judge-v1"
+category_guardrail_profile = "llama-guard-4-12b-local-category-v1"
+category_guardrail_policy = "config/guardrails/llama-guard-4-gbt45654-v1.toml"
+subjudge_context_mode = "compact"

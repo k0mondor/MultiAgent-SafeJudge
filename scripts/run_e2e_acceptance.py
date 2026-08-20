@@ -10,13 +10,17 @@ from pathlib import Path
 from safejudge.cli import main as safejudge_main
 from safejudge.contracts.judging import DecisionStatus, EvaluationResult
 from safejudge.models.batch import TargetBatchManifest
+from safejudge.reporting import write_evaluation_markdown_report
 from safejudge.workflows.batch import EvaluationBatchManifest
+
+DEFAULT_TAXONOMY_ID = "gb-t-45654-2025-safejudge-v1"
+DEFAULT_TAXONOMY_VERSION = "1.0"
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Canonical data -> Target -> blind grounding -> single Judge -> result"
+            "Canonical data -> Target -> grounding -> DeepSeek Judge + category guardrail -> result"
         )
     )
     parser.add_argument("--input", required=True, type=Path)
@@ -26,7 +30,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--jury-plan",
         type=Path,
-        default=Path("config/juries/m3-single-judge-v1.toml"),
+        default=Path("config/juries/m3-deepseek-llamaguard-remote-v1.toml"),
     )
     parser.add_argument(
         "--model-registry",
@@ -42,6 +46,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--limit", type=int, default=1)
     parser.add_argument("--run-id")
+    taxonomy_group = parser.add_mutually_exclusive_group()
+    taxonomy_group.add_argument(
+        "--taxonomy",
+        default=DEFAULT_TAXONOMY_ID,
+        help=f"taxonomy ID (default: {DEFAULT_TAXONOMY_ID})",
+    )
+    taxonomy_group.add_argument(
+        "--no-taxonomy",
+        dest="taxonomy",
+        action="store_const",
+        const=None,
+        help="disable taxonomy routing for this run",
+    )
+    parser.add_argument("--taxonomy-version", default=DEFAULT_TAXONOMY_VERSION)
     parser.add_argument("--allow-unqualified-model", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
     return parser
@@ -78,6 +96,16 @@ def main() -> int:
         for capability in (args.capability or ["text+image"])
         for item in ("--capability", capability)
     ]
+    taxonomy_flags = (
+        [
+            "--taxonomy",
+            args.taxonomy,
+            "--taxonomy-version",
+            args.taxonomy_version,
+        ]
+        if args.taxonomy is not None
+        else ["--no-taxonomy"]
+    )
 
     safejudge_main(
         [
@@ -149,6 +177,7 @@ def main() -> int:
             "1",
             "--limit",
             str(args.limit),
+            *taxonomy_flags,
             *common_flags,
             *overwrite_flags,
         ]
@@ -165,12 +194,25 @@ def main() -> int:
         for line in evaluation_output.read_text(encoding="utf-8").splitlines()
         if line.strip()
     )
+    readable_report_path = output_dir / "evaluation-report.md"
+    write_evaluation_markdown_report(
+        readable_report_path,
+        manifest=evaluation_manifest,
+        results=results,
+    )
+    print(f"Human-readable report: {readable_report_path}")
     if target_manifest.failure_count or (
         target_manifest.sample_count != target_manifest.input_sample_count
     ):
         raise SystemExit("formal acceptance failed during Target generation")
     if evaluation_manifest.failure_count or evaluation_manifest.judge_failure_count:
         raise SystemExit("formal acceptance contains batch or Judge failures")
+    if evaluation_manifest.jury.category_guardrail is not None and (
+        evaluation_manifest.guardrail_failure_count
+        or evaluation_manifest.guardrail_verdict_count
+        != evaluation_manifest.category_result_count
+    ):
+        raise SystemExit("formal acceptance contains missing or failed guardrail results")
     if evaluation_manifest.sample_count != evaluation_manifest.input_sample_count:
         raise SystemExit("formal acceptance did not produce one result per input")
     if not results or any(
@@ -183,6 +225,9 @@ def main() -> int:
         "status": "passed",
         "real_models": True,
         "grounding_mode": "blind",
+        "taxonomy_id": evaluation_manifest.taxonomy_id,
+        "taxonomy_version": evaluation_manifest.taxonomy_version,
+        "standard_id": evaluation_manifest.standard_id,
         "run_id": run_id,
         "input": str(input_path),
         "samples": len(results),
@@ -192,6 +237,8 @@ def main() -> int:
         "jury_hash": evaluation_manifest.jury_hash,
         "levels": evaluation_manifest.compliance_level_counts,
         "arbitrations": evaluation_manifest.arbitration_count,
+        "guardrail_verdicts": evaluation_manifest.guardrail_verdict_count,
+        "guardrail_triggers": evaluation_manifest.guardrail_trigger_counts,
         "provider_attempts": {
             "target": target_manifest.provider_attempt_count,
             "jury": evaluation_manifest.provider_attempt_count,
@@ -204,6 +251,7 @@ def main() -> int:
         "evaluation_manifest": str(
             evaluation_output.with_suffix(".jsonl.manifest.json")
         ),
+        "human_readable_report": str(readable_report_path),
     }
     report_path = output_dir / "e2e-acceptance-report.json"
     report_path.write_text(

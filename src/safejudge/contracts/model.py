@@ -41,6 +41,7 @@ class InputModality(StrEnum):
 class ModelTextPart(ContractModel):
     kind: Literal["text"] = "text"
     text: NonEmptyString
+    chat_role: Literal["system", "user", "assistant"] | None = None
 
 
 class ModelMediaPart(ContractModel):

@@ -1,0 +1,7 @@
+schema_version = "2.0"
+jury_id = "m3-kimi-llamaguard-remote-v1"
+version = "1.0"
+judge_profile = "kimi-k2.6-no-reasoning-judge-v1"
+category_guardrail_profile = "llama-guard-4-12b-remote-category-v1"
+category_guardrail_policy = "config/guardrails/llama-guard-4-gbt45654-v1.toml"
+subjudge_context_mode = "compact"

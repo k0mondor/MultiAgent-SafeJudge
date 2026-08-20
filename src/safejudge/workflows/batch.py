@@ -99,6 +99,9 @@ class EvaluationBatchManifest(ContractModel):
     multi_label_sample_count: int = Field(default=0, ge=0)
     zero_category_sample_count: int = Field(default=0, ge=0)
     category_review_required_count: int = Field(default=0, ge=0)
+    guardrail_verdict_count: int = Field(default=0, ge=0)
+    guardrail_failure_count: int = Field(default=0, ge=0)
+    guardrail_trigger_counts: dict[str, int] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=utc_now)
 
 
@@ -121,6 +124,9 @@ class _CategoryManifestStatistics:
     multi_label_sample_count: int
     zero_category_sample_count: int
     review_required_count: int
+    guardrail_verdict_count: int
+    guardrail_failure_count: int
+    guardrail_trigger_counts: dict[str, int]
 
 
 class EvaluationBatchFailure(ContractModel):
@@ -142,6 +148,7 @@ async def run_evaluation_batch(
     context: InvocationContext,
     jury_definition: JuryDefinition,
     judge_provider: ModelProvider,
+    category_guardrail_provider: ModelProvider | None = None,
     max_concurrency: int = 3,
     max_sample_concurrency: int = 1,
     max_retries: int = 1,
@@ -181,6 +188,7 @@ async def run_evaluation_batch(
     jury = build_jury_runtime(
         jury_definition,
         provider=judge_provider,
+        guardrail_provider=category_guardrail_provider,
         store=store,
         policy=InvocationPolicy(
             max_concurrency=max_concurrency,
@@ -332,6 +340,9 @@ async def run_evaluation_batch(
         multi_label_sample_count=category_stats.multi_label_sample_count,
         zero_category_sample_count=category_stats.zero_category_sample_count,
         category_review_required_count=category_stats.review_required_count,
+        guardrail_verdict_count=category_stats.guardrail_verdict_count,
+        guardrail_failure_count=category_stats.guardrail_failure_count,
+        guardrail_trigger_counts=category_stats.guardrail_trigger_counts,
     )
     _atomic_write(
         manifest_path,
@@ -445,10 +456,16 @@ def _category_manifest_statistics(
         for category_id in result.routed_category_ids
     )
     level_counts: dict[str, Counter[str]] = {}
+    guardrail_trigger_counts: Counter[str] = Counter()
     for result in results:
         for category_result in result.category_results:
             counts = level_counts.setdefault(category_result.category_id, Counter())
             counts[_manifest_level(category_result.aggregate)] += 1
+            if (
+                category_result.guardrail_verdict is not None
+                and category_result.guardrail_verdict.label == "triggered"
+            ):
+                guardrail_trigger_counts[category_result.category_id] += 1
     return _CategoryManifestStatistics(
         hit_counts=dict(sorted(hit_counts.items())),
         level_counts={
@@ -468,6 +485,17 @@ def _category_manifest_statistics(
             for result in results
             for category_result in result.category_results
         ),
+        guardrail_verdict_count=sum(
+            category_result.guardrail_verdict is not None
+            for result in results
+            for category_result in result.category_results
+        ),
+        guardrail_failure_count=sum(
+            category_result.guardrail_failure is not None
+            for result in results
+            for category_result in result.category_results
+        ),
+        guardrail_trigger_counts=dict(sorted(guardrail_trigger_counts.items())),
     )
 
 

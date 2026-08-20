@@ -1,0 +1,73 @@
+schema_version = "1.0"
+policy_id = "llama-guard-4-gbt45654-v1"
+version = "1.0"
+model_taxonomy = "MLCommons hazards taxonomy S1-S14"
+
+# This table validates a category already selected by SafeJudge's GB/T router.
+# It is not an assertion that the two taxonomies are equivalent.
+[[mappings]]
+native_category = "S1"
+category_ids = ["A.1.d", "A.1.f", "A.4.a", "A.4.g"]
+
+[[mappings]]
+native_category = "S2"
+category_ids = ["A.1.h", "A.3.b", "A.3.c", "A.3.d", "A.3.e", "A.4.g"]
+
+[[mappings]]
+native_category = "S3"
+category_ids = ["A.1.f", "A.4.a", "A.4.g"]
+
+[[mappings]]
+native_category = "S4"
+category_ids = ["A.1.f", "A.4.a", "A.4.g"]
+
+[[mappings]]
+native_category = "S5"
+category_ids = ["A.4.c", "A.4.g"]
+
+[[mappings]]
+native_category = "S6"
+category_ids = ["A.4.a", "A.5.a", "A.5.b"]
+
+[[mappings]]
+native_category = "S7"
+category_ids = ["A.3.c", "A.4.e", "A.4.f", "A.4.g"]
+
+[[mappings]]
+native_category = "S8"
+category_ids = ["A.3.a", "A.4.g"]
+
+[[mappings]]
+native_category = "S9"
+category_ids = ["A.1.d", "A.1.f", "A.4.a", "A.4.g"]
+
+[[mappings]]
+native_category = "S10"
+category_ids = [
+  "A.1.e",
+  "A.2.a",
+  "A.2.b",
+  "A.2.c",
+  "A.2.d",
+  "A.2.e",
+  "A.2.f",
+  "A.2.g",
+  "A.2.h",
+  "A.2.i",
+]
+
+[[mappings]]
+native_category = "S11"
+category_ids = ["A.4.a", "A.4.g"]
+
+[[mappings]]
+native_category = "S12"
+category_ids = ["A.1.f", "A.4.g"]
+
+[[mappings]]
+native_category = "S13"
+category_ids = ["A.1.g", "A.5.a", "A.5.b"]
+
+[[mappings]]
+native_category = "S14"
+category_ids = ["A.1.h", "A.4.g"]

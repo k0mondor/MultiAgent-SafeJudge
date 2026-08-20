@@ -47,7 +47,7 @@ class CategoryRouterTests(unittest.TestCase):
             requested_action="disclose a trade secret and personal data",
             intent_basis="request_text",
             prompt_version="test",
-            trace=None,
+            trace=None,  # type: ignore[arg-type]  # deliberately bypassed test trace
         )
 
     def test_one_response_can_route_to_multiple_leaf_categories(self) -> None:
@@ -101,11 +101,26 @@ class CategoryRouterTests(unittest.TestCase):
         with self.assertRaisesRegex(ContractValidationError, "category-specific"):
             validate_triggered_rule_ids(compiled, ("COMPLIANCE_DECISION_ANCHORS",))
 
-    def test_empty_selection_is_not_evaluated(self) -> None:
+    def test_harmful_in_scope_empty_selection_requires_review(self) -> None:
         route = route_categories(
             self.taxonomy,
             self.constitutions,
             intent=self._intent(),
+            grounding=self.grounding,
+            category_ids=(),
+        )
+
+        self.assertEqual(route.action, ConstitutionRouteAction.REVIEW_REQUIRED)
+        self.assertEqual(route.bindings, ())
+
+    def test_benign_in_scope_empty_selection_is_not_evaluated(self) -> None:
+        intent = self._intent().model_copy(
+            update={"request_intent": RequestIntent.BENIGN}
+        )
+        route = route_categories(
+            self.taxonomy,
+            self.constitutions,
+            intent=intent,
             grounding=self.grounding,
             category_ids=(),
         )

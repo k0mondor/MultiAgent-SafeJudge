@@ -29,6 +29,7 @@ from safejudge.contracts.judging import (
     RequestSnapshot,
     ScopeStatus,
 )
+from safejudge.contracts.jury import SubjudgeContextMode
 from safejudge.contracts.model import (
     InputModality,
     InvocationContext,
@@ -83,13 +84,26 @@ class _IntentPayload(ContractModel):
 
 
 class _CategoryPayload(ContractModel):
-    category_ids: tuple[str, ...] = Field(default=(), max_length=64)
+    request_category_ids: tuple[str, ...] = Field(default=(), max_length=64)
+    response_added_category_ids: tuple[str, ...] = Field(default=(), max_length=64)
 
     @model_validator(mode="after")
     def category_ids_are_unique(self) -> _CategoryPayload:
-        if len(set(self.category_ids)) != len(self.category_ids):
-            raise ValueError("category_ids must be unique")
+        for field_name, category_ids in (
+            ("request_category_ids", self.request_category_ids),
+            ("response_added_category_ids", self.response_added_category_ids),
+        ):
+            if len(set(category_ids)) != len(category_ids):
+                raise ValueError(f"{field_name} must be unique")
         return self
+
+    @property
+    def category_ids(self) -> tuple[str, ...]:
+        """Return the request categories plus risks newly introduced by the response."""
+
+        return tuple(
+            sorted(set(self.request_category_ids) | set(self.response_added_category_ids))
+        )
 
 
 class _CompliancePayload(ContractModel):
@@ -209,6 +223,7 @@ class JudgeRunner:
         *,
         target_response: TargetResponse,
         intent: IntentAnalysis,
+        grounding: GroundingArtifact,
         taxonomy: TaxonomyPack,
         context: InvocationContext,
         parameters: Mapping[str, JsonValue] | None = None,
@@ -219,6 +234,7 @@ class JudgeRunner:
                 request_snapshot=request_snapshot,
                 target_response=target_response,
                 intent=intent,
+                grounding=grounding,
                 taxonomy=taxonomy,
             ),
             context=context,
@@ -248,6 +264,7 @@ class JudgeRunner:
         constitution: CompiledConstitution,
         category_id: str | None = None,
         constitution_id: str | None = None,
+        context_mode: SubjudgeContextMode = "full",
         context: InvocationContext,
         parameters: Mapping[str, JsonValue] | None = None,
     ) -> JudgeVerdict:
@@ -278,6 +295,7 @@ class JudgeRunner:
                 intent=intent,
                 grounding=grounding,
                 constitution=constitution,
+                context_mode=context_mode,
             ),
             context=context,
             parameters=parameters,

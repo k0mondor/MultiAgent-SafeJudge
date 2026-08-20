@@ -37,7 +37,11 @@ def stable_request_hash(*, provider: str, model: str, request: ModelRequest) -> 
         "role": request.role.value,
         "provider": provider,
         "model": model,
-        "parts": [part.model_dump(mode="json") for part in request.parts],
+        # New optional transport hints must not invalidate historical requests when absent.
+        "parts": [
+            part.model_dump(mode="json", exclude_none=True)
+            for part in request.parts
+        ],
         "parameters": request.parameters,
     }
     canonical = json.dumps(

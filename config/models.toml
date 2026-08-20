@@ -333,10 +333,10 @@ temperature = 0
 max_tokens = 2048
 
 [[models]]
-profile_id = "deepseek-v4-flash-0731-judge-v1"
+profile_id = "deepseek-v4-flash-no-reasoning-judge-v1"
 profile_version = "1"
 provider = "openrouter"
-model_id = "deepseek/deepseek-v4-flash-0731"
+model_id = "deepseek/deepseek-v4-flash"
 roles = ["judge"]
 structured_output_mode = "native_json_schema"
 qualification_status = "candidate"
@@ -345,11 +345,13 @@ openrouter_require_parameters = true
 openrouter_response_healing = true
 
 [[models.retry_parameters]]
-max_tokens = 4096
+max_tokens = 3072
+reasoning = { enabled = false }
 
 [models.default_parameters]
 temperature = 0
-max_tokens = 2048
+max_tokens = 1536
+reasoning = { enabled = false }
 
 [[models]]
 profile_id = "kimi-k2.6-no-reasoning-judge-v1"
@@ -462,6 +464,38 @@ max_tokens = 3072
 [models.default_parameters]
 temperature = 0
 max_tokens = 1536
+
+[[models]]
+profile_id = "llama-guard-4-12b-remote-category-v1"
+profile_version = "1"
+provider = "openrouter"
+model_id = "meta-llama/llama-guard-4-12b"
+roles = ["judge"]
+structured_output_mode = "none"
+judge_adapter = "llama_guard"
+qualification_status = "candidate"
+max_contract_retries = 0
+openrouter_require_parameters = false
+openrouter_response_healing = false
+
+[models.default_parameters]
+temperature = 0
+max_tokens = 16
+
+[[models]]
+profile_id = "llama-guard-4-12b-local-category-v1"
+profile_version = "1"
+provider = "local-openai"
+model_id = "meta-llama/Llama-Guard-4-12B"
+roles = ["judge"]
+structured_output_mode = "none"
+judge_adapter = "llama_guard"
+qualification_status = "candidate"
+max_contract_retries = 0
+
+[models.default_parameters]
+temperature = 0
+max_tokens = 16
 
 [[models]]
 profile_id = "qwen2.5-1.5b-local-judge-v1"

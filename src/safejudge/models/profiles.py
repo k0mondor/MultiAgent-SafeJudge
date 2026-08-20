@@ -22,6 +22,11 @@ class StructuredOutputMode(StrEnum):
     PROMPTED_JSON = "prompted_json"
 
 
+class JudgeAdapterKind(StrEnum):
+    CHAT_JSON = "chat_json"
+    LLAMA_GUARD = "llama_guard"
+
+
 class QualificationStatus(StrEnum):
     CANDIDATE = "candidate"
     APPROVED = "approved"
@@ -37,6 +42,7 @@ class ModelProfile(ContractModel):
     model_id: str = Field(min_length=1)
     roles: frozenset[ModelRole] = Field(min_length=1)
     structured_output_mode: StructuredOutputMode = StructuredOutputMode.NONE
+    judge_adapter: JudgeAdapterKind = JudgeAdapterKind.CHAT_JSON
     thinking_field: Literal["reasoning", "reasoning_content", "content_tags"] | None = None
     thinking_always_enabled: bool = False
     default_parameters: dict[str, JsonValue] = Field(default_factory=dict)
@@ -51,9 +57,16 @@ class ModelProfile(ContractModel):
     def role_and_output_mode_are_compatible(self) -> ModelProfile:
         structured_roles = {ModelRole.JUDGE, ModelRole.GROUNDING}
         has_structured_role = bool(structured_roles.intersection(self.roles))
-        if (
+        guardrail_judge = (
+            ModelRole.JUDGE in self.roles
+            and self.judge_adapter is JudgeAdapterKind.LLAMA_GUARD
+        )
+        missing_structured_output = (
             has_structured_role
             and self.structured_output_mode is StructuredOutputMode.NONE
+        )
+        if missing_structured_output and not (
+            guardrail_judge and self.roles == {ModelRole.JUDGE}
         ):
             raise ValueError("judge and grounding profiles require a structured output mode")
         if (
@@ -63,6 +76,10 @@ class ModelProfile(ContractModel):
             raise ValueError(
                 "structured output mode is only valid for judge or grounding profiles"
             )
+        if self.judge_adapter is not JudgeAdapterKind.CHAT_JSON and not guardrail_judge:
+            raise ValueError("specialized judge adapters require a judge-only profile")
+        if guardrail_judge and self.structured_output_mode is not StructuredOutputMode.NONE:
+            raise ValueError("Llama Guard uses its native text classification output")
         return self
 
     def supports_role(self, role: ModelRole) -> bool:
@@ -70,11 +87,15 @@ class ModelProfile(ContractModel):
 
     @property
     def fingerprint(self) -> str:
+        payload = self.model_dump(
+            mode="json",
+            exclude={"qualification_status", "qualification_report"},
+        )
+        if self.judge_adapter is JudgeAdapterKind.CHAT_JSON:
+            # Preserve historical fingerprints created before adapters were configurable.
+            payload.pop("judge_adapter")
         encoded = json.dumps(
-            self.model_dump(
-                mode="json",
-                exclude={"qualification_status", "qualification_report"},
-            ),
+            payload,
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),

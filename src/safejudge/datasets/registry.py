@@ -6,6 +6,7 @@ from collections.abc import Callable
 
 from safejudge.core.errors import AdapterError
 from safejudge.datasets.adapters import (
+    JailBreakV28KAdapter,
     MMSafetyBenchAdapter,
     MOSSBenchAdapter,
     OmniSafetyBenchAdapter,
@@ -15,6 +16,7 @@ from safejudge.datasets.base import DatasetAdapter
 AdapterFactory = Callable[[], DatasetAdapter]
 
 _BUILT_INS: dict[str, AdapterFactory] = {
+    JailBreakV28KAdapter.name: JailBreakV28KAdapter,
     MMSafetyBenchAdapter.name: MMSafetyBenchAdapter,
     MOSSBenchAdapter.name: MOSSBenchAdapter,
     OmniSafetyBenchAdapter.name: OmniSafetyBenchAdapter,

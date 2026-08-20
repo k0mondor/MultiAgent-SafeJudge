@@ -54,6 +54,7 @@ from safejudge.workflows.batch import run_evaluation_batch
 
 _TARGET_CAPABILITIES = ("text", "text+image", "text+audio", "text+video")
 _DEFAULT_MAX_LOCAL_MEDIA_BYTES = 100 * 1024 * 1024
+_DEFAULT_TAXONOMY_ID = "gb-t-45654-2025-safejudge-v1"
 
 
 def _doctor(settings: Settings) -> int:
@@ -173,7 +174,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--jury-plan",
         required=True,
         type=Path,
-        help="TOML plan selecting the one Judge profile used by every judging stage",
+        help=(
+            "TOML plan selecting the main Judge and an optional specialized "
+            "per-category guardrail sub-agent"
+        ),
     )
     evaluate_run_parser.add_argument(
         "--model-registry",
@@ -181,12 +185,21 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path("config/models.toml"),
     )
     evaluate_run_parser.add_argument("--allow-unqualified-model", action="store_true")
-    evaluate_run_parser.add_argument(
+    taxonomy_group = evaluate_run_parser.add_mutually_exclusive_group()
+    taxonomy_group.add_argument(
         "--taxonomy",
+        default=_DEFAULT_TAXONOMY_ID,
         help=(
-            "taxonomy ID to enable multi-label Category Router "
-            "(for example gb-t-45654-2025-safejudge-v1)"
+            "taxonomy ID for the multi-label Category Router "
+            f"(default: {_DEFAULT_TAXONOMY_ID})"
         ),
+    )
+    taxonomy_group.add_argument(
+        "--no-taxonomy",
+        dest="taxonomy",
+        action="store_const",
+        const=None,
+        help="disable the taxonomy Category Router for this run",
     )
     evaluate_run_parser.add_argument("--taxonomy-version")
     evaluate_run_parser.add_argument(
@@ -445,6 +458,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                         artifact_root=args.artifact_root.resolve(),
                         judge_env_file=args.judge_env_file,
                     ),
+                    category_guardrail_provider=_category_guardrail_provider(
+                        definition,
+                        artifact_root=args.artifact_root.resolve(),
+                        judge_env_file=args.judge_env_file,
+                    ),
                     max_retries=args.max_retries,
                 )
             )
@@ -462,6 +480,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "jury_id": evaluation_result.manifest.jury.jury_id,
                     "jury_hash": evaluation_result.manifest.jury_hash,
                     "judge_model": evaluation_result.manifest.jury.model,
+                    "subjudge_context_mode": (
+                        evaluation_result.manifest.jury.subjudge_context_mode or "full"
+                    ),
+                    "category_guardrail_model": (
+                        evaluation_result.manifest.jury.category_guardrail.model
+                        if evaluation_result.manifest.jury.category_guardrail is not None
+                        else None
+                    ),
                     "samples": evaluation_result.manifest.sample_count,
                     "input_samples": evaluation_result.manifest.input_sample_count,
                     "batch_failures": evaluation_result.manifest.failure_count,
@@ -478,6 +504,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "levels": evaluation_result.manifest.compliance_level_counts,
                     "category_hits": evaluation_result.manifest.category_hit_counts,
                     "category_levels": evaluation_result.manifest.category_level_counts,
+                    "guardrail_triggers": (
+                        evaluation_result.manifest.guardrail_trigger_counts
+                    ),
+                    "guardrail_failures": (
+                        evaluation_result.manifest.guardrail_failure_count
+                    ),
                     "multi_label_samples": (
                         evaluation_result.manifest.multi_label_sample_count
                     ),
@@ -628,6 +660,29 @@ def _jury_provider(
 ) -> ModelProvider:
     profile = definition.profile
     artifacts = FileArtifactStore(artifact_root / "judge")
+    if profile.provider == "local-openai":
+        return LocalOpenAIProvider(
+            settings=_local_judge_settings(profile, judge_env_file),
+            capabilities=_judge_capabilities(),
+            artifact_store=artifacts,
+        )
+    return OpenRouterProvider(
+        settings=_openrouter_profile_settings(profile),
+        capabilities=_judge_capabilities(),
+        artifact_store=artifacts,
+    )
+
+
+def _category_guardrail_provider(
+    definition: JuryDefinition,
+    *,
+    artifact_root: Path,
+    judge_env_file: Path,
+) -> ModelProvider | None:
+    profile = definition.category_guardrail_profile
+    if profile is None:
+        return None
+    artifacts = FileArtifactStore(artifact_root / "guardrail")
     if profile.provider == "local-openai":
         return LocalOpenAIProvider(
             settings=_local_judge_settings(profile, judge_env_file),

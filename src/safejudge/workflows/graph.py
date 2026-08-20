@@ -39,6 +39,8 @@ from safejudge.contracts.judging import (
     DecisionStatus,
     EvaluationResult,
     EvaluationSpec,
+    GuardrailExecutionFailure,
+    GuardrailVerdict,
     IntentAnalysis,
     JudgeAxis,
     JudgeExecutionFailure,
@@ -95,6 +97,20 @@ def _merge_failures(
     return (*left, *right)
 
 
+def _merge_guardrail_verdicts(
+    left: tuple[GuardrailVerdict, ...] | list[GuardrailVerdict],
+    right: tuple[GuardrailVerdict, ...] | list[GuardrailVerdict],
+) -> tuple[GuardrailVerdict, ...]:
+    return (*left, *right)
+
+
+def _merge_guardrail_failures(
+    left: tuple[GuardrailExecutionFailure, ...] | list[GuardrailExecutionFailure],
+    right: tuple[GuardrailExecutionFailure, ...] | list[GuardrailExecutionFailure],
+) -> tuple[GuardrailExecutionFailure, ...]:
+    return (*left, *right)
+
+
 class EvaluationInput(ContractModel):
     """One canonical sample, optionally paired with an already frozen target answer."""
 
@@ -123,6 +139,12 @@ class EvaluationState(BaseModel):
     verdicts: Annotated[tuple[JudgeVerdict, ...], _merge_verdicts] = ()
     judge_failures: Annotated[
         tuple[JudgeExecutionFailure, ...], _merge_failures
+    ] = ()
+    guardrail_verdicts: Annotated[
+        tuple[GuardrailVerdict, ...], _merge_guardrail_verdicts
+    ] = ()
+    guardrail_failures: Annotated[
+        tuple[GuardrailExecutionFailure, ...], _merge_guardrail_failures
     ] = ()
     category_results: tuple[CategoryEvaluationResult, ...] = ()
     routed_axes: tuple[JudgeAxis, ...] = ()
@@ -195,11 +217,15 @@ class JudgeTaskState(BaseModel):
     constitution_id: str | None = None
     verdicts: tuple[JudgeVerdict, ...] = ()
     judge_failures: tuple[JudgeExecutionFailure, ...] = ()
+    guardrail_verdicts: tuple[GuardrailVerdict, ...] = ()
+    guardrail_failures: tuple[GuardrailExecutionFailure, ...] = ()
 
 
 class JudgeTaskOutput(ContractModel):
     verdicts: tuple[JudgeVerdict, ...]
     judge_failures: tuple[JudgeExecutionFailure, ...]
+    guardrail_verdicts: tuple[GuardrailVerdict, ...] = ()
+    guardrail_failures: tuple[GuardrailExecutionFailure, ...] = ()
 
 
 EvaluationGraph = CompiledStateGraph[
@@ -448,6 +474,7 @@ async def _category_selection(
             _require_request_snapshot(state),
             target_response=_require_target_response(state),
             intent=_require_intent(state),
+            grounding=_require_grounding(state),
             taxonomy=taxonomy,
             context=runtime.context.invocation,
             parameters=runtime.context.judge_parameters,
@@ -575,9 +602,16 @@ async def _route_terminal(
     ) as span:
         conflicts: tuple[str, ...] = ()
         if decision_status is DecisionStatus.REVIEW_REQUIRED:
-            conflicts = tuple(_require_grounding(state).error_codes) or (
-                "INSUFFICIENT_GROUNDING",
-            )
+            grounding_errors = tuple(_require_grounding(state).error_codes)
+            if grounding_errors:
+                conflicts = grounding_errors
+            elif (
+                state.category_route is not None
+                and not state.category_route.selected_category_ids
+            ):
+                conflicts = ("CATEGORY_ROUTING_EMPTY",)
+            else:
+                conflicts = ("INSUFFICIENT_GROUNDING",)
         aggregate = AggregateDecision(
             decision_status=decision_status,
             response_compliance_level=None,
@@ -601,7 +635,13 @@ def _build_judge_subgraph(
         state: JudgeTaskState,
         runtime: Runtime[EvaluationContext],
         config: RunnableConfig,
-    ) -> dict[str, tuple[JudgeVerdict, ...] | tuple[JudgeExecutionFailure, ...]]:
+    ) -> dict[
+        str,
+        tuple[JudgeVerdict, ...]
+        | tuple[JudgeExecutionFailure, ...]
+        | tuple[GuardrailVerdict, ...]
+        | tuple[GuardrailExecutionFailure, ...],
+    ]:
         node_name = _judge_node_name(axis)
         async with _track_node(
             runtime=runtime,
@@ -611,6 +651,14 @@ def _build_judge_subgraph(
             evaluation_key=state.evaluation_key,
             input_value=state,
         ) as span:
+            output: dict[
+                str,
+                tuple[JudgeVerdict, ...]
+                | tuple[JudgeExecutionFailure, ...]
+                | tuple[GuardrailVerdict, ...]
+                | tuple[GuardrailExecutionFailure, ...],
+            ] = {}
+            compiled = None
             try:
                 policy_pack = runtime.context.constitution_pack
                 if state.constitution_id is not None:
@@ -620,6 +668,12 @@ def _build_judge_subgraph(
                             "category judge requires Constitution registry"
                         )
                     policy_pack = registry.get(state.constitution_id)
+                compiled = compile_constitution(
+                    policy_pack,
+                    axis=axis,
+                    scenarios=frozenset(state.constitution_scenarios),
+                    category_id=state.category_id,
+                )
                 verdict = await runtime.context.jury.for_axis(axis).judge(
                     axis=axis,
                     sample_id=state.sample_id,
@@ -627,14 +681,10 @@ def _build_judge_subgraph(
                     target_response=state.target_response,
                     grounding=state.grounding_artifact,
                     intent=state.intent_analysis,
-                    constitution=compile_constitution(
-                        policy_pack,
-                        axis=axis,
-                        scenarios=frozenset(state.constitution_scenarios),
-                        category_id=state.category_id,
-                    ),
+                    constitution=compiled,
                     category_id=state.category_id,
                     constitution_id=state.constitution_id,
+                    context_mode=runtime.context.jury.subjudge_context_mode,
                     context=runtime.context.invocation,
                     parameters=runtime.context.judge_parameters,
                 )
@@ -646,8 +696,44 @@ def _build_judge_subgraph(
                     category_id=state.category_id,
                     constitution_id=state.constitution_id,
                 )
-                return _record_output(span, {"judge_failures": (failure,)})
-            return _record_output(span, {"verdicts": (verdict,)})
+                output["judge_failures"] = (failure,)
+            else:
+                output["verdicts"] = (verdict,)
+
+            guardrail = runtime.context.jury.guardrail
+            if (
+                axis is JudgeAxis.COMPLIANCE
+                and guardrail is not None
+                and state.category_id is not None
+                and state.constitution_id is not None
+                and compiled is not None
+            ):
+                try:
+                    guardrail_verdict = await guardrail.judge_category(
+                        sample_id=state.sample_id,
+                        request_snapshot=state.request_snapshot,
+                        target_response=state.target_response,
+                        grounding=state.grounding_artifact,
+                        intent=state.intent_analysis,
+                        constitution=compiled,
+                        category_id=state.category_id,
+                        constitution_id=state.constitution_id,
+                        context_mode=runtime.context.jury.subjudge_context_mode,
+                        context=runtime.context.invocation,
+                        parameters=runtime.context.judge_parameters,
+                    )
+                except SafeJudgeError as error:
+                    output["guardrail_failures"] = (
+                        _guardrail_failure(
+                            state.sample_id,
+                            state.category_id,
+                            state.constitution_id,
+                            error,
+                        ),
+                    )
+                else:
+                    output["guardrail_verdicts"] = (guardrail_verdict,)
+            return _record_output(span, output)
 
     builder = StateGraph(
         JudgeTaskState,
@@ -793,6 +879,24 @@ def _aggregate_category_binding(
         if failure.category_id == binding.category_id
         and failure.constitution_id == binding.constitution_id
     )
+    guardrail_verdicts = tuple(
+        verdict
+        for verdict in state.guardrail_verdicts
+        if verdict.category_id == binding.category_id
+        and verdict.constitution_id == binding.constitution_id
+    )
+    guardrail_failures = tuple(
+        failure
+        for failure in state.guardrail_failures
+        if failure.category_id == binding.category_id
+        and failure.constitution_id == binding.constitution_id
+    )
+    guardrail_outcomes = len(guardrail_verdicts) + len(guardrail_failures)
+    expected_guardrail_outcomes = 1 if context.jury.guardrail is not None else 0
+    if guardrail_outcomes != expected_guardrail_outcomes:
+        raise ContractValidationError(
+            f"category guardrail {binding.category_id} has missing or duplicate outcomes"
+        )
     axes = {verdict.axis for verdict in verdicts}
     failed_axes = {failure.axis for failure in failures}
     expected = {JudgeAxis.COMPLIANCE, JudgeAxis.HARM_ENABLEMENT}
@@ -855,6 +959,8 @@ def _aggregate_category_binding(
         constitution_id=binding.constitution_id,
         verdicts=tuple(sorted(verdicts, key=lambda item: item.axis.value)),
         judge_failures=tuple(sorted(failures, key=lambda item: item.axis.value)),
+        guardrail_verdict=(guardrail_verdicts[0] if guardrail_verdicts else None),
+        guardrail_failure=(guardrail_failures[0] if guardrail_failures else None),
         aggregate=aggregate,
     )
 
@@ -1062,6 +1168,32 @@ def _judge_failure(
         provider_response_id=provider_response_id,
         raw_artifact=raw_artifact,
         contract_retries_exhausted=contract_retries_exhausted,
+        category_id=category_id,
+        constitution_id=constitution_id,
+    )
+
+
+def _guardrail_failure(
+    sample_id: str,
+    category_id: str,
+    constitution_id: str,
+    error: SafeJudgeError,
+) -> GuardrailExecutionFailure:
+    error_kind: str | None = None
+    raw_artifact = None
+    request_id = f"guardrail:category:{sample_id}:{category_id}"
+    if isinstance(error, JudgeContractError):
+        request_id = error.request_id
+        raw_artifact = error.raw_artifact
+    elif isinstance(error, ProviderError):
+        error_kind = error.kind.value
+        raw_artifact = error.raw_artifact
+    return GuardrailExecutionFailure(
+        error_type=type(error).__name__,
+        error_kind=error_kind,
+        message=str(error)[:1_200],
+        request_id=request_id,
+        raw_artifact=raw_artifact,
         category_id=category_id,
         constitution_id=constitution_id,
     )

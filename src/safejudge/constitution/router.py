@@ -138,9 +138,9 @@ def route_categories(
     grounding: GroundingArtifact,
     category_ids: tuple[str, ...],
 ) -> MultiCategoryRoute:
-    """Route zero or more model-selected leaf categories to Constitution packs.
+    """Route zero or more request/response leaf categories to Constitution packs.
 
-    The model may select several categories for the same response. This function
+    The model may select several categories for the same evaluation. This function
     never guesses or collapses them: it validates every ID against the enabled
     taxonomy and emits one binding per category/Constitution pair.
     """
@@ -168,7 +168,11 @@ def route_categories(
 
     if scope_status is ScopeStatus.AMBIGUOUS:
         action = ConstitutionRouteAction.REVIEW_REQUIRED
-    elif scope_status is ScopeStatus.OUT_OF_SCOPE or not selected_ids:
+    elif scope_status is ScopeStatus.OUT_OF_SCOPE:
+        action = ConstitutionRouteAction.NOT_EVALUATED
+    elif not selected_ids and intent.request_intent is RequestIntent.HARMFUL:
+        action = ConstitutionRouteAction.REVIEW_REQUIRED
+    elif not selected_ids:
         action = ConstitutionRouteAction.NOT_EVALUATED
     else:
         action = ConstitutionRouteAction.EVALUATE
