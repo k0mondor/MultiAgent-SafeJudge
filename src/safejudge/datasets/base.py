@@ -33,4 +33,3 @@ class DatasetAdapter(ABC):
         context: AdapterContext,
     ) -> Iterator[CanonicalMultimodalSample]:
         """Yield canonical samples or raise a classified adapter error."""
-

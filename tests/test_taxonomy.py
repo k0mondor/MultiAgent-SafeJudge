@@ -49,20 +49,17 @@ constitution_ids = ["illegal-enablement-v1"]
 class TaxonomyRegistryTests(unittest.TestCase):
     def test_repository_taxonomy_has_confirmed_standard_identity(self) -> None:
         registry = TaxonomyRegistry.load(Path("config/taxonomies"))
-        pack = registry.get("gb-t-45654-2025-safejudge-v1", version="1.0")
+        pack = registry.get("gb-t-45654-2025-safejudge-v1", version="1.1")
 
         self.assertEqual(pack.identity.standard_id, "GB/T 45654-2025")
         self.assertEqual(pack.status.value, "active")
         self.assertEqual(len(pack.categories), 36)
         self.assertEqual(len(pack.selectable_categories), 31)
         self.assertEqual(len(pack.routed_categories), 31)
-        registry.validate_constitutions(
-            ConstitutionRegistry.load(Path("config/constitutions"))
-        )
+        registry.validate_constitutions(ConstitutionRegistry.load(Path("config/constitutions")))
         child_counts = {
             parent_id: sum(
-                category.parent_id == parent_id
-                for category in pack.selectable_categories
+                category.parent_id == parent_id for category in pack.selectable_categories
             )
             for parent_id in ("A.1", "A.2", "A.3", "A.4", "A.5")
         }
@@ -73,6 +70,9 @@ class TaxonomyRegistryTests(unittest.TestCase):
         by_id = {category.category_id: category for category in pack.categories}
         self.assertEqual(by_id["A.3.c"].category_name, "泄露他人商业秘密")
         self.assertEqual(by_id["A.4.e"].standard_clause, "附录 A.4 e)")
+        self.assertIsNotNone(by_id["A.3.c"].operational_definition)
+        self.assertTrue(by_id["A.3.c"].inclusion_anchors)
+        self.assertTrue(by_id["A.3.c"].exclusion_anchors)
 
     def test_load_identity_and_constitution_links(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -83,16 +83,12 @@ class TaxonomyRegistryTests(unittest.TestCase):
 
             self.assertEqual(pack.identity.standard_id, "STANDARD-001")
             self.assertEqual(len(pack.identity.taxonomy_hash), 64)
-            registry.validate_constitutions(
-                ConstitutionRegistry.load(Path("config/constitutions"))
-            )
+            registry.validate_constitutions(ConstitutionRegistry.load(Path("config/constitutions")))
 
     def test_unknown_source_reference_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             source = Path(temp_dir)
-            prefix, separator, suffix = _VALID_TAXONOMY.rpartition(
-                'source_id = "official"'
-            )
+            prefix, separator, suffix = _VALID_TAXONOMY.rpartition('source_id = "official"')
             self.assertTrue(separator)
             invalid = f'{prefix}source_id = "missing"{suffix}'
             (source / "taxonomy.toml").write_text(invalid, encoding="utf-8")

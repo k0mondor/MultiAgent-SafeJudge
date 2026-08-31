@@ -57,6 +57,7 @@ class MMSafetyBenchAdapter(DatasetAdapter):
                     verify=context.verify_media,
                     hash_media=context.hash_media,
                 )
+
                 source_id = id_fragment(question_id)
                 yield CanonicalMultimodalSample(
                     sample_id=f"mm-safetybench:{id_fragment(scenario)}:{source_id}:{variant}",
@@ -86,4 +87,3 @@ class MMSafetyBenchAdapter(DatasetAdapter):
                         "phrase_type": optional_text(record, "Phrase Type"),
                     },
                 )
-

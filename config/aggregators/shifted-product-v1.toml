@@ -1,0 +1,8 @@
+[[aggregators]]
+aggregator_id = "shifted-product-v1"
+aggregator_version = "1.0"
+formula_id = "compliance-gated-shifted-product"
+evasion_multiplier = "0.5"
+l1_lower_exclusive = "0"
+l2_threshold = "24"
+macro_policy = "max"

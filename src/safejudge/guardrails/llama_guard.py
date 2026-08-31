@@ -119,6 +119,13 @@ class LlamaGuardCategoryRunner:
         constitution: CompiledConstitution,
         category_id: str,
         constitution_id: str,
+        category_name: str | None = None,
+        parent_id: str | None = None,
+        parent_name: str | None = None,
+        standard_clause: str | None = None,
+        operational_definition: str | None = None,
+        inclusion_anchors: tuple[str, ...] = (),
+        exclusion_anchors: tuple[str, ...] = (),
         context_mode: SubjudgeContextMode = "full",
         context: InvocationContext,
         parameters: Mapping[str, JsonValue] | None = None,
@@ -128,9 +135,7 @@ class LlamaGuardCategoryRunner:
                 f"guardrail model {self.profile.model_id!r} does not support text input"
             )
         request = ModelRequest(
-            request_id=(
-                f"guardrail:category:{sample_id}:{category_id}"
-            ),
+            request_id=(f"guardrail:category:{sample_id}:{category_id}"),
             role=ModelRole.JUDGE,
             parts=(
                 ModelTextPart(
@@ -139,6 +144,14 @@ class LlamaGuardCategoryRunner:
                         request_snapshot,
                         grounding,
                         intent,
+                        category_id=category_id,
+                        category_name=category_name,
+                        parent_id=parent_id,
+                        parent_name=parent_name,
+                        standard_clause=standard_clause,
+                        operational_definition=operational_definition,
+                        inclusion_anchors=inclusion_anchors,
+                        exclusion_anchors=exclusion_anchors,
                         context_mode=context_mode,
                     ),
                 ),
@@ -157,9 +170,11 @@ class LlamaGuardCategoryRunner:
                 provider_response_id=result.response.response_id,
                 raw_artifact=result.response.raw_artifact,
             ) from error
-        triggered = category_id in self.policy.mapped_categories(
-            decision.native_categories
-        )
+        # Compliance follows Llama Guard's native binary decision.  The S1-S14
+        # to GB/T crosswalk is intentionally not a decision gate: the two
+        # taxonomies are not equivalent, so an absent crosswalk entry must not
+        # turn a native ``unsafe`` result into ``not_triggered``.
+        triggered = decision.label == "unsafe"
         triggered_rule_ids = _triggered_rule_ids(constitution) if triggered else ()
         if triggered:
             validate_triggered_rule_ids(constitution, triggered_rule_ids)
@@ -183,6 +198,14 @@ def _guardrail_user_message(
     grounding: GroundingArtifact,
     intent: IntentAnalysis,
     *,
+    category_id: str,
+    category_name: str | None,
+    parent_id: str | None,
+    parent_name: str | None,
+    standard_clause: str | None,
+    operational_definition: str | None,
+    inclusion_anchors: tuple[str, ...],
+    exclusion_anchors: tuple[str, ...],
     context_mode: SubjudgeContextMode,
 ) -> str:
     observations = [
@@ -196,6 +219,16 @@ def _guardrail_user_message(
         "scope_status": intent.scope_status.value,
         "requested_action": intent.requested_action,
         "intent_basis": intent.intent_basis,
+        "current_category": {
+            "category_id": category_id,
+            "category_name": category_name,
+            "parent_id": parent_id,
+            "parent_name": parent_name,
+            "standard_clause": standard_clause,
+            "operational_definition": operational_definition,
+            "inclusion_anchors": inclusion_anchors,
+            "exclusion_anchors": exclusion_anchors,
+        },
         "trusted_media_grounding": observations,
     }
     if context_mode == "full":

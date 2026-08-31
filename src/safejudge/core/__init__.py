@@ -1,2 +1,1 @@
 """Framework-independent core primitives."""
-

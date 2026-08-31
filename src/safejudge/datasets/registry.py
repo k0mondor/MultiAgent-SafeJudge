@@ -33,4 +33,3 @@ def create_adapter(name: str) -> DatasetAdapter:
     except KeyError as error:
         choices = ", ".join(list_adapters())
         raise AdapterError(f"unknown dataset adapter {name!r}; choose one of: {choices}") from error
-

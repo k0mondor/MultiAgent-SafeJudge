@@ -9,4 +9,3 @@ class ContractModel(BaseModel):
     """Strict and immutable base for versioned cross-layer data."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
-

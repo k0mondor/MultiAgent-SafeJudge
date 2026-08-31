@@ -57,7 +57,7 @@ class EvaluationFileDigest(ContractModel):
 
 
 class EvaluationBatchManifest(ContractModel):
-    manifest_version: Literal["4.0"] = "4.0"
+    manifest_version: Literal["4.0", "5.0"] = "5.0"
     evaluation_result_schema_version: Literal["4.0"] = "4.0"
     samples_input: EvaluationFileDigest
     targets_input: EvaluationFileDigest
@@ -72,6 +72,9 @@ class EvaluationBatchManifest(ContractModel):
     taxonomy_version: str | None = None
     taxonomy_hash: Sha256 | None = None
     standard_id: str | None = None
+    aggregator_id: str | None = None
+    aggregator_version: str | None = None
+    aggregator_hash: Sha256 | None = None
     grounding_mode: GroundingMode
     grounding_pipeline_id: str
     grounding_pipeline_version: str
@@ -84,6 +87,7 @@ class EvaluationBatchManifest(ContractModel):
     failure_count: int = Field(ge=0)
     judge_failure_count: int = Field(ge=0)
     arbitration_count: int = Field(ge=0)
+    arbitration_failure_count: int = Field(default=0, ge=0)
     logical_call_count: int = Field(ge=0)
     provider_attempt_count: int = Field(ge=0)
     contract_repair_call_count: int = Field(ge=0)
@@ -102,6 +106,8 @@ class EvaluationBatchManifest(ContractModel):
     guardrail_verdict_count: int = Field(default=0, ge=0)
     guardrail_failure_count: int = Field(default=0, ge=0)
     guardrail_trigger_counts: dict[str, int] = Field(default_factory=dict)
+    facet_value_counts: dict[str, dict[str, int]] = Field(default_factory=dict)
+    facet_combination_counts: dict[str, int] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=utc_now)
 
 
@@ -127,6 +133,8 @@ class _CategoryManifestStatistics:
     guardrail_verdict_count: int
     guardrail_failure_count: int
     guardrail_trigger_counts: dict[str, int]
+    facet_value_counts: dict[str, dict[str, int]]
+    facet_combination_counts: dict[str, int]
 
 
 class EvaluationBatchFailure(ContractModel):
@@ -271,9 +279,7 @@ async def run_evaluation_batch(
                     sample_id=sample.sample_id,
                     target_response_id=target.response_id,
                     error_type=type(outcome).__name__,
-                    error_message=(
-                        str(outcome)[:2_000] or "evaluation failed without a message"
-                    ),
+                    error_message=(str(outcome)[:2_000] or "evaluation failed without a message"),
                 )
             )
         else:
@@ -281,13 +287,9 @@ async def run_evaluation_batch(
 
     output_content = "".join(f"{item.model_dump_json()}\n" for item in results).encode()
     _atomic_write(output_path, output_content)
-    failure_content = "".join(
-        f"{item.model_dump_json()}\n" for item in failures
-    ).encode()
+    failure_content = "".join(f"{item.model_dump_json()}\n" for item in failures).encode()
     _atomic_write(failure_path, failure_content)
-    level_counts = Counter(
-        _manifest_level(item.aggregate) for item in results
-    )
+    level_counts = Counter(_manifest_level(item.aggregate) for item in results)
     category_stats = _category_manifest_statistics(results)
     run_stats = store.run_stats(context=context, role=ModelRole.JUDGE)
     manifest = EvaluationBatchManifest(
@@ -307,13 +309,12 @@ async def run_evaluation_batch(
         constitution_version=resolved_constitution.version,
         constitution_hash=resolved_constitution.constitution_hash,
         taxonomy_id=(taxonomy_pack.taxonomy_id if taxonomy_pack is not None else None),
-        taxonomy_version=(
-            taxonomy_pack.taxonomy_version if taxonomy_pack is not None else None
-        ),
-        taxonomy_hash=(
-            taxonomy_pack.taxonomy_hash if taxonomy_pack is not None else None
-        ),
+        taxonomy_version=(taxonomy_pack.taxonomy_version if taxonomy_pack is not None else None),
+        taxonomy_hash=(taxonomy_pack.taxonomy_hash if taxonomy_pack is not None else None),
         standard_id=(taxonomy_pack.standard_id if taxonomy_pack is not None else None),
+        aggregator_id=graph_context.aggregation_policy.aggregator_id,
+        aggregator_version=graph_context.aggregation_policy.aggregator_version,
+        aggregator_hash=graph_context.aggregation_policy.fingerprint,
         grounding_mode=resolved_grounding.mode,
         grounding_pipeline_id=resolved_grounding.pipeline_id,
         grounding_pipeline_version=resolved_grounding.pipeline_version,
@@ -324,7 +325,16 @@ async def run_evaluation_batch(
         sample_count=len(results),
         failure_count=len(failures),
         judge_failure_count=sum(_judge_failure_count(item) for item in results),
-        arbitration_count=sum(item.arbitration is not None for item in results),
+        arbitration_count=sum(
+            int(item.arbitration is not None)
+            + sum(category.arbitration is not None for category in item.category_results)
+            for item in results
+        ),
+        arbitration_failure_count=sum(
+            category.arbitration_failure is not None
+            for item in results
+            for category in item.category_results
+        ),
         logical_call_count=run_stats.logical_call_count,
         provider_attempt_count=run_stats.provider_attempt_count,
         contract_repair_call_count=run_stats.contract_repair_call_count,
@@ -343,6 +353,8 @@ async def run_evaluation_batch(
         guardrail_verdict_count=category_stats.guardrail_verdict_count,
         guardrail_failure_count=category_stats.guardrail_failure_count,
         guardrail_trigger_counts=category_stats.guardrail_trigger_counts,
+        facet_value_counts=category_stats.facet_value_counts,
+        facet_combination_counts=category_stats.facet_combination_counts,
     )
     _atomic_write(
         manifest_path,
@@ -427,9 +439,7 @@ def _validate_paths(
         raise ConfigurationError(f"canonical input JSONL does not exist: {samples_path}")
     if not target_responses_path.is_file():
         raise ConfigurationError(f"target response JSONL does not exist: {target_responses_path}")
-    if not overwrite and (
-        output_path.exists() or manifest_path.exists() or failure_path.exists()
-    ):
+    if not overwrite and (output_path.exists() or manifest_path.exists() or failure_path.exists()):
         raise ConfigurationError(
             f"output or manifest already exists: {output_path}; pass --overwrite to replace it"
         )
@@ -451,12 +461,17 @@ def _category_manifest_statistics(
     results: list[EvaluationResult],
 ) -> _CategoryManifestStatistics:
     hit_counts: Counter[str] = Counter(
-        category_id
-        for result in results
-        for category_id in result.routed_category_ids
+        category_id for result in results for category_id in result.routed_category_ids
     )
     level_counts: dict[str, Counter[str]] = {}
     guardrail_trigger_counts: Counter[str] = Counter()
+    facet_value_counts: dict[str, Counter[str]] = {
+        "specificity": Counter(),
+        "completeness": Counter(),
+        "feasibility": Counter(),
+        "evasion_help": Counter(),
+    }
+    facet_combination_counts: Counter[str] = Counter()
     for result in results:
         for category_result in result.category_results:
             counts = level_counts.setdefault(category_result.category_id, Counter())
@@ -466,6 +481,24 @@ def _category_manifest_statistics(
                 and category_result.guardrail_verdict.label == "triggered"
             ):
                 guardrail_trigger_counts[category_result.category_id] += 1
+            enablement = next(
+                (
+                    verdict.enablement_scores
+                    for verdict in category_result.verdicts
+                    if verdict.enablement_scores is not None
+                ),
+                None,
+            )
+            if enablement is not None:
+                values = {
+                    "specificity": enablement.specificity,
+                    "completeness": enablement.completeness,
+                    "feasibility": enablement.feasibility,
+                    "evasion_help": enablement.evasion_help,
+                }
+                for facet, value in values.items():
+                    facet_value_counts[facet][str(value)] += 1
+                facet_combination_counts["/".join(str(value) for value in values.values())] += 1
     return _CategoryManifestStatistics(
         hit_counts=dict(sorted(hit_counts.items())),
         level_counts={
@@ -473,9 +506,7 @@ def _category_manifest_statistics(
             for category_id, counts in sorted(level_counts.items())
         },
         result_count=sum(len(result.category_results) for result in results),
-        multi_label_sample_count=sum(
-            len(result.routed_category_ids) > 1 for result in results
-        ),
+        multi_label_sample_count=sum(len(result.routed_category_ids) > 1 for result in results),
         zero_category_sample_count=sum(
             result.category_analysis is not None and not result.routed_category_ids
             for result in results
@@ -496,13 +527,16 @@ def _category_manifest_statistics(
             for category_result in result.category_results
         ),
         guardrail_trigger_counts=dict(sorted(guardrail_trigger_counts.items())),
+        facet_value_counts={
+            facet: dict(sorted(counts.items())) for facet, counts in facet_value_counts.items()
+        },
+        facet_combination_counts=dict(sorted(facet_combination_counts.items())),
     )
 
 
 def _judge_failure_count(result: EvaluationResult) -> int:
     return len(result.judge_failures) + sum(
-        len(category_result.judge_failures)
-        for category_result in result.category_results
+        len(category_result.judge_failures) for category_result in result.category_results
     )
 
 

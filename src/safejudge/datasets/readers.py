@@ -62,4 +62,3 @@ def iter_mapping_records(path: Path) -> Iterator[Mapping[str, Any]]:
         return
 
     raise AdapterError(f"unsupported metadata format {suffix!r}: {path}")
-

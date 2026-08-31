@@ -11,6 +11,7 @@ For every active taxonomy, commit a TOML file under `config/taxonomies/` contain
 - the exact `standard_id`, edition/year in `standard_version`, and official title;
 - publisher, publication/effective dates, official URL, and access date;
 - stable category IDs, formal category names, parent relationships, and clause locators;
+- project-authored operational definitions plus inclusion/exclusion anchors for routed leaves;
 - the Constitution pack IDs used to evaluate each category;
 - the taxonomy status, version, and any scope notes.
 
@@ -22,6 +23,9 @@ GB/T 45654-2025. Its official identity, publication metadata, and Appendix A cla
 are recorded as 5 non-selectable parent categories and 31 routing-enabled leaf risks. Each
 leaf maps to one of the category-filtered `gbt45654-a1-v1` through `gbt45654-a5-v1`
 Constitution packs.
+Version `1.1` adds executable category boundaries derived from each formal leaf name:
+an operational definition, positive inclusion anchors, and refusal/defensive-quotation
+exclusions. These fields participate in the taxonomy hash and are included in Judge inputs.
 
 ## When a source document may be committed
 
@@ -69,21 +73,28 @@ reproducibility or for selecting another taxonomy:
 safejudge evaluate run-jsonl `
   <the existing required arguments> `
   --taxonomy gb-t-45654-2025-safejudge-v1 `
-  --taxonomy-version 1.0
+  --taxonomy-version 1.1
 ```
 
 Use `--no-taxonomy` only when deliberately reproducing the legacy route-free
 evaluation path.
 
-The Category Router sees the frozen target response and may return zero, one, or several
-leaf IDs. IDs are rejected unless they are selectable and routing-enabled. Every selected
+The upstream Request Analyzer sees only the original request, Grounding facts, and the
+complete GB/T taxonomy; it never sees the frozen target response during category discovery.
+It may return zero, one, or several request-grounded leaf IDs. A separate Response Risk
+Enricher then reads the frozen response and may add genuinely new leaf risks, but cannot
+remove or rewrite request categories. The final route is the union of both sources, which
+remain separately auditable. IDs are rejected unless they are selectable and routing-enabled. Every selected
 leaf is bound to its mapped Constitution, compiled with that `category_id`, judged by an
 independent compliance/enablement panel, and persisted under `category_results`.
 Each panel verdict must also return non-empty `triggered_rule_ids`; the runtime rejects
 unknown rule IDs and requires at least one rule specific to the routed leaf category.
 `EvaluationSpec` and the batch manifest include the taxonomy identity and hash; each final
-result includes the Category Router hash and selected IDs. Zero matches produces
-`not_evaluated`; ambiguous grounding produces `review_required`. The router never silently
+result includes the Category Router hash and selected IDs. A harmful in-scope request with
+zero matches produces `review_required`; a benign in-scope request with zero risk leaves
+still runs one global Oversensitivity Judge and resolves the safety level as L0. Out-of-scope
+produces `not_evaluated`, while ambiguous or insufficient grounding produces
+`review_required`. The router never silently
 selects a parent or fallback class. The batch manifest summarizes leaf hit counts,
 per-leaf final-level counts, multi-label samples, zero-match samples, and category results
 requiring review.

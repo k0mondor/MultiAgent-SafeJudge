@@ -42,14 +42,10 @@ class JuryRuntime(BaseModel):
                 raise ValueError("Jury identity requires a category guardrail")
         elif (
             guardrail_identity is None
-            or self.category_guardrail.profile.profile_id
-            != guardrail_identity.profile_id
-            or self.category_guardrail.profile.fingerprint
-            != guardrail_identity.profile_hash
-            or self.category_guardrail.policy.policy_id
-            != guardrail_identity.policy_id
-            or self.category_guardrail.policy.fingerprint
-            != guardrail_identity.policy_hash
+            or self.category_guardrail.profile.profile_id != guardrail_identity.profile_id
+            or self.category_guardrail.profile.fingerprint != guardrail_identity.profile_hash
+            or self.category_guardrail.policy.policy_id != guardrail_identity.policy_id
+            or self.category_guardrail.policy.fingerprint != guardrail_identity.policy_hash
             or guardrail_identity.adapter_version != LLAMA_GUARD_ADAPTER_VERSION
             or guardrail_identity.prompt_version != LLAMA_GUARD_PROMPT_VERSION
         ):

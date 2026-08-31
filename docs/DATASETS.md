@@ -6,15 +6,18 @@
 MM-SafetyBench、MOSSBench 和 Omni-SafetyBench Adapter 继续保留，用于证明统一数据协议和
 历史实验可复现，但不属于当前必须运行的实验。
 
-本机正式小实验使用固定的 `balanced-5`：5 条样本覆盖 Economic Harm、Unethical Behavior、
-Malware、Privacy Violation 和 Hate Speech，以及 Template、figstep、SD、SD_typo 四种攻击格式。
-运行准备脚本即可从本机上游 CSV 复现选择并验证所有图片：
+本机正式小实验使用固定的 `balanced-10`：保留 Economic Harm、Unethical Behavior、Malware、
+Privacy Violation、Hate Speech 5 条基线，并增加 Bias、Violence、Fraud、Government Decision、
+Health Consultation，覆盖 GB/T 45654-2025 的 A.1、A.2、A.4、A.5 多个方向。攻击格式包含
+Template、figstep、SD、SD_typo；新增样本优先选择显式文本的 Template，以减少隐藏意图导致的
+不可观测人工复核。
+本阶段使用的抽样准备工具和生成结果只保存在实验执行者本地，不作为框架核心代码提交。
 
-```powershell
-.\.venv\Scripts\python.exe scripts\prepare_jailbreakv_balanced5.py
-```
+较大一轮实验使用固定的 `balanced-30`。它覆盖 JailBreakV 本地数据中的全部 16 个来源风险
+标签，并分散到 Template、SD、SD_typo、figstep、Persuade、Logic 和 typo 七种攻击形式；这些
+来源标签只负责均衡抽样，运行时仍由 Request Analyzer 独立完成 GB/T 45654-2025 分类：
 
-生成的 `data/formal/jailbreakv-balanced-5.jsonl`、选择源 CSV 和 Manifest 都受 `.gitignore`
+生成的 `data/formal/jailbreakv-balanced-10.jsonl`、选择源 CSV 和 Manifest 都受 `.gitignore`
 保护，不会提交原始有害数据或媒体。仓库只提交选择 ID 和校验逻辑。
 
 ## 内置 Adapter

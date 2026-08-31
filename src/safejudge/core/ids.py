@@ -15,4 +15,3 @@ def new_run_id() -> RunId:
 
 def new_sample_id() -> SampleId:
     return SampleId(f"sample_{uuid4().hex}")
-

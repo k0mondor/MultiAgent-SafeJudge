@@ -3,8 +3,10 @@ policy_id = "llama-guard-4-gbt45654-v1"
 version = "1.0"
 model_taxonomy = "MLCommons hazards taxonomy S1-S14"
 
-# This table validates a category already selected by SafeJudge's GB/T router.
-# It is not an assertion that the two taxonomies are equivalent.
+# Non-decisional audit crosswalk for comparing Llama Guard's native category
+# with a category already selected by SafeJudge's GB/T router. Compliance is
+# determined by native safe/unsafe; absence from this table never means safe.
+# This is not an assertion that the two taxonomies are equivalent.
 [[mappings]]
 native_category = "S1"
 category_ids = ["A.1.d", "A.1.f", "A.4.a", "A.4.g"]

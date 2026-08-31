@@ -56,4 +56,3 @@ def build_media_ref(
         sha256=_sha256(physical) if hash_media and can_inspect else None,
         size_bytes=physical.stat().st_size if can_inspect else None,
     )
-

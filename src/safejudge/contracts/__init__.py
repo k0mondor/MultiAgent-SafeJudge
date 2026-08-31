@@ -20,6 +20,7 @@ from safejudge.contracts.evaluation import (
 from safejudge.contracts.judging import (
     AggregateDecision,
     ArbitrationDecision,
+    ArbitrationExecutionFailure,
     CategoryAnalysis,
     CategoryEvaluationResult,
     EnablementScores,
@@ -57,6 +58,7 @@ from safejudge.contracts.model import (
 __all__ = [
     "AggregateDecision",
     "ArbitrationDecision",
+    "ArbitrationExecutionFailure",
     "ArtifactRef",
     "CanonicalMultimodalSample",
     "CategoryAnalysis",

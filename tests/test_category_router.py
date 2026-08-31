@@ -11,7 +11,13 @@ from safejudge.constitution import (
     validate_triggered_rule_ids,
 )
 from safejudge.contracts.dataset import RequestIntent
-from safejudge.contracts.judging import IntentAnalysis, JudgeAxis, ScopeStatus
+from safejudge.contracts.judging import (
+    AmbiguityKind,
+    AnalysisStatus,
+    IntentAnalysis,
+    JudgeAxis,
+    ScopeStatus,
+)
 from safejudge.core.errors import ContractValidationError
 from safejudge.grounding.contracts import (
     GroundingArtifact,
@@ -26,7 +32,7 @@ class CategoryRouterTests(unittest.TestCase):
         self.constitutions = ConstitutionRegistry.load(Path("config/constitutions"))
         self.taxonomy = TaxonomyRegistry.load(Path("config/taxonomies")).get(
             "gb-t-45654-2025-safejudge-v1",
-            version="1.0",
+            version="1.1",
         )
         self.grounding = GroundingArtifact.create(
             sample_id="sample-1",
@@ -41,6 +47,8 @@ class CategoryRouterTests(unittest.TestCase):
     def _intent() -> IntentAnalysis:
         # The routing unit only consumes intake fields, so no provider trace is needed.
         return IntentAnalysis.model_construct(
+            analysis_status=AnalysisStatus.RESOLVED,
+            ambiguity_kind=AmbiguityKind.NONE,
             scope_status=ScopeStatus.IN_SCOPE,
             request_intent=RequestIntent.HARMFUL,
             scope_id="taxonomy-router",
@@ -64,6 +72,26 @@ class CategoryRouterTests(unittest.TestCase):
         self.assertEqual(
             {(item.category_id, item.constitution_id) for item in route.bindings},
             {("A.3.c", "gbt45654-a3-v1"), ("A.4.f", "gbt45654-a4-v1")},
+        )
+        for binding in route.bindings:
+            self.assertIsNotNone(binding.parent_name)
+            self.assertTrue(binding.operational_definition)
+            self.assertTrue(binding.inclusion_anchors)
+            self.assertTrue(binding.exclusion_anchors)
+
+    def test_response_added_category_keeps_its_route_origin(self) -> None:
+        route = route_categories(
+            self.taxonomy,
+            self.constitutions,
+            intent=self._intent(),
+            grounding=self.grounding,
+            category_ids=("A.3.c", "A.4.f"),
+            response_added_category_ids=("A.4.f",),
+        )
+
+        self.assertEqual(
+            {item.category_id: item.category_origin for item in route.bindings},
+            {"A.3.c": "request", "A.4.f": "response_added"},
         )
 
     def test_compiler_applies_only_rules_for_current_category(self) -> None:
@@ -113,10 +141,8 @@ class CategoryRouterTests(unittest.TestCase):
         self.assertEqual(route.action, ConstitutionRouteAction.REVIEW_REQUIRED)
         self.assertEqual(route.bindings, ())
 
-    def test_benign_in_scope_empty_selection_is_not_evaluated(self) -> None:
-        intent = self._intent().model_copy(
-            update={"request_intent": RequestIntent.BENIGN}
-        )
+    def test_benign_in_scope_empty_selection_runs_global_oversensitivity(self) -> None:
+        intent = self._intent().model_copy(update={"request_intent": RequestIntent.BENIGN})
         route = route_categories(
             self.taxonomy,
             self.constitutions,
@@ -125,7 +151,7 @@ class CategoryRouterTests(unittest.TestCase):
             category_ids=(),
         )
 
-        self.assertEqual(route.action, ConstitutionRouteAction.NOT_EVALUATED)
+        self.assertEqual(route.action, ConstitutionRouteAction.EVALUATE)
         self.assertEqual(route.bindings, ())
 
     def test_disabled_or_unknown_category_is_rejected(self) -> None:

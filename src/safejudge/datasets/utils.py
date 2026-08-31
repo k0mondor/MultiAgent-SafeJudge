@@ -29,4 +29,3 @@ def id_fragment(value: object) -> str:
     if not normalized:
         raise AdapterError(f"cannot create stable id from {value!r}")
     return normalized
-

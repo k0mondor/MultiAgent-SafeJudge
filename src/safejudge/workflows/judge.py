@@ -16,10 +16,13 @@ from safejudge.contracts.base import ContractModel
 from safejudge.contracts.dataset import RequestIntent
 from safejudge.contracts.evaluation import TargetResponse
 from safejudge.contracts.judging import (
+    AmbiguityKind,
+    AnalysisStatus,
     ArbitrationDecision,
     ArbitrationResolutionStatus,
     CategoryAnalysis,
     EnablementScores,
+    GuardrailVerdict,
     IntentAnalysis,
     JudgeAxis,
     JudgeCallTrace,
@@ -59,12 +62,18 @@ from safejudge.taxonomy.contracts import TaxonomyPack
 from safejudge.workflows.prompts import (
     ARBITRATION_PROMPT_VERSION,
     CATEGORY_ROUTER_PROMPT_VERSION,
+    GROUNDING_REVIEW_PROMPT_VERSION,
     INTENT_PROMPT_VERSION,
     PANEL_PROMPT_VERSION,
+    RESPONSE_CATEGORY_PROMPT_VERSION,
+    SCOPE_REVIEW_PROMPT_VERSION,
     arbitration_prompt,
     category_router_prompt,
+    grounding_sufficiency_review_prompt,
     intent_prompt,
     panel_prompt,
+    response_category_prompt,
+    scope_boundary_review_prompt,
 )
 
 _ADAPTIVE_RETRY_KINDS = {
@@ -75,35 +84,80 @@ _ADAPTIVE_RETRY_KINDS = {
 
 
 class _IntentPayload(ContractModel):
+    analysis_status: AnalysisStatus | None = None
+    ambiguity_kind: AmbiguityKind | None = None
     scope_status: ScopeStatus
     request_intent: RequestIntent
     requested_action: str = Field(min_length=1, max_length=500)
     intent_basis: str = Field(
         pattern=r"^(request_text|trusted_media_grounding|benchmark_label|mixed|insufficient_grounding)$"
     )
+    request_category_ids: tuple[str, ...] = Field(default=(), max_length=64)
+
+    @model_validator(mode="before")
+    @classmethod
+    def infer_missing_review_ambiguity(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        normalized = dict(value)
+        if (
+            normalized.get("analysis_status") == AnalysisStatus.REVIEW_REQUIRED.value
+            and normalized.get("ambiguity_kind") in {None, ""}
+        ):
+            normalized["ambiguity_kind"] = (
+                AmbiguityKind.INSUFFICIENT_GROUNDING.value
+                if normalized.get("intent_basis") == "insufficient_grounding"
+                else AmbiguityKind.SEMANTIC_INTENT.value
+            )
+        return normalized
+
+    @model_validator(mode="after")
+    def request_category_ids_are_unique(self) -> _IntentPayload:
+        if len(set(self.request_category_ids)) != len(self.request_category_ids):
+            raise ValueError("request_category_ids must be unique")
+        unresolved_scope = self.scope_status in {ScopeStatus.UNKNOWN, ScopeStatus.AMBIGUOUS}
+        unresolved_intent = self.request_intent in {
+            RequestIntent.AMBIGUOUS,
+            RequestIntent.UNKNOWN,
+        }
+        if self.analysis_status is AnalysisStatus.RESOLVED and (
+            unresolved_scope
+            or unresolved_intent
+            or self.ambiguity_kind not in {None, AmbiguityKind.NONE}
+        ):
+            raise ValueError("resolved analysis has unresolved scope, intent, or evidence")
+        if self.analysis_status is AnalysisStatus.REVIEW_REQUIRED and self.ambiguity_kind in {
+            None,
+            AmbiguityKind.NONE,
+        }:
+            raise ValueError("review_required analysis must identify ambiguity_kind")
+        return self
 
 
 class _CategoryPayload(ContractModel):
     request_category_ids: tuple[str, ...] = Field(default=(), max_length=64)
-    response_added_category_ids: tuple[str, ...] = Field(default=(), max_length=64)
 
     @model_validator(mode="after")
     def category_ids_are_unique(self) -> _CategoryPayload:
-        for field_name, category_ids in (
-            ("request_category_ids", self.request_category_ids),
-            ("response_added_category_ids", self.response_added_category_ids),
-        ):
-            if len(set(category_ids)) != len(category_ids):
-                raise ValueError(f"{field_name} must be unique")
+        if len(set(self.request_category_ids)) != len(self.request_category_ids):
+            raise ValueError("request_category_ids must be unique")
         return self
 
     @property
     def category_ids(self) -> tuple[str, ...]:
-        """Return the request categories plus risks newly introduced by the response."""
+        """Return request-grounded categories only."""
 
-        return tuple(
-            sorted(set(self.request_category_ids) | set(self.response_added_category_ids))
-        )
+        return tuple(sorted(self.request_category_ids))
+
+
+class _ResponseCategoryPayload(ContractModel):
+    response_added_category_ids: tuple[str, ...] = Field(default=(), max_length=64)
+
+    @model_validator(mode="after")
+    def category_ids_are_unique(self) -> _ResponseCategoryPayload:
+        if len(set(self.response_added_category_ids)) != len(self.response_added_category_ids):
+            raise ValueError("response_added_category_ids must be unique")
+        return self
 
 
 class _CompliancePayload(ContractModel):
@@ -161,9 +215,7 @@ class _ArbitrationPayload(ContractModel):
         supported = {JudgeAxis.COMPLIANCE, JudgeAxis.HARM_ENABLEMENT}
         if not invalid or not invalid.issubset(supported):
             raise ValueError("resolved arbitration must identify supported invalid panel axes")
-        if (JudgeAxis.COMPLIANCE in invalid) != (
-            self.reconciled_compliance_label is not None
-        ):
+        if (JudgeAxis.COMPLIANCE in invalid) != (self.reconciled_compliance_label is not None):
             raise ValueError("compliance reconciliation must match invalid_panel_axes")
         if (JudgeAxis.HARM_ENABLEMENT in invalid) != (
             self.reconciled_enablement_scores is not None
@@ -191,33 +243,196 @@ class JudgeRunner:
         *,
         grounding: GroundingArtifact,
         constitution: CompiledConstitution,
+        taxonomy: TaxonomyPack | None = None,
         context: InvocationContext,
         parameters: Mapping[str, JsonValue] | None = None,
     ) -> IntentAnalysis:
         result = await self._invoke(
             request_id=f"judge:intent:{request_snapshot.sample_id}",
-            prompt=intent_prompt(request_snapshot, grounding, constitution),
+            prompt=intent_prompt(request_snapshot, grounding, constitution, taxonomy),
             context=context,
             parameters=parameters,
             payload_schema=_IntentPayload,
+            semantic_validator=lambda payload: _validate_request_category_ids(
+                payload,
+                taxonomy=taxonomy,
+            ),
         )
         payload = self._validate_payload(_IntentPayload, result.response.answer)
+        return self._to_intent_analysis(
+            payload,
+            result=result,
+            constitution=constitution,
+            grounding=grounding,
+            taxonomy=taxonomy,
+            prompt_version=INTENT_PROMPT_VERSION,
+        )
+
+    async def review_insufficient_grounding(
+        self,
+        request_snapshot: RequestSnapshot,
+        *,
+        previous_intent: IntentAnalysis,
+        grounding: GroundingArtifact,
+        constitution: CompiledConstitution,
+        taxonomy: TaxonomyPack | None,
+        context: InvocationContext,
+        parameters: Mapping[str, JsonValue] | None = None,
+    ) -> IntentAnalysis:
+        result = await self._invoke(
+            request_id=f"judge:grounding-review:{request_snapshot.sample_id}",
+            prompt=grounding_sufficiency_review_prompt(
+                request_snapshot=request_snapshot,
+                previous_intent=previous_intent,
+                grounding=grounding,
+                constitution=constitution,
+                taxonomy=taxonomy,
+            ),
+            context=context,
+            parameters=parameters,
+            payload_schema=_IntentPayload,
+            semantic_validator=lambda payload: _validate_request_category_ids(
+                payload,
+                taxonomy=taxonomy,
+            ),
+        )
+        payload = self._validate_payload(_IntentPayload, result.response.answer)
+        return self._to_intent_analysis(
+            payload,
+            result=result,
+            constitution=constitution,
+            grounding=grounding,
+            taxonomy=taxonomy,
+            prompt_version=GROUNDING_REVIEW_PROMPT_VERSION,
+        )
+
+    async def review_out_of_scope(
+        self,
+        request_snapshot: RequestSnapshot,
+        *,
+        previous_intent: IntentAnalysis,
+        grounding: GroundingArtifact,
+        constitution: CompiledConstitution,
+        taxonomy: TaxonomyPack,
+        context: InvocationContext,
+        parameters: Mapping[str, JsonValue] | None = None,
+    ) -> IntentAnalysis:
+        result = await self._invoke(
+            request_id=f"judge:scope-review:{request_snapshot.sample_id}",
+            prompt=scope_boundary_review_prompt(
+                request_snapshot=request_snapshot,
+                previous_intent=previous_intent,
+                grounding=grounding,
+                constitution=constitution,
+                taxonomy=taxonomy,
+            ),
+            context=context,
+            parameters=parameters,
+            payload_schema=_IntentPayload,
+            semantic_validator=lambda payload: _validate_request_category_ids(
+                payload,
+                taxonomy=taxonomy,
+            ),
+        )
+        payload = self._validate_payload(_IntentPayload, result.response.answer)
+        return self._to_intent_analysis(
+            payload,
+            result=result,
+            constitution=constitution,
+            grounding=grounding,
+            taxonomy=taxonomy,
+            prompt_version=SCOPE_REVIEW_PROMPT_VERSION,
+        )
+
+    @staticmethod
+    def _to_intent_analysis(
+        payload: _IntentPayload,
+        *,
+        result: InvocationResult,
+        constitution: CompiledConstitution,
+        grounding: GroundingArtifact,
+        taxonomy: TaxonomyPack | None,
+        prompt_version: str,
+    ) -> IntentAnalysis:
         payload_data = payload.model_dump()
+        unresolved = (
+            payload.scope_status in {ScopeStatus.UNKNOWN, ScopeStatus.AMBIGUOUS}
+            or payload.request_intent in {RequestIntent.AMBIGUOUS, RequestIntent.UNKNOWN}
+            or payload.intent_basis == "insufficient_grounding"
+            or payload.analysis_status is AnalysisStatus.REVIEW_REQUIRED
+            or payload.ambiguity_kind not in {None, AmbiguityKind.NONE}
+        )
+        payload_data["analysis_status"] = payload.analysis_status or (
+            AnalysisStatus.REVIEW_REQUIRED if unresolved else AnalysisStatus.RESOLVED
+        )
+        payload_data["ambiguity_kind"] = payload.ambiguity_kind or (
+            AmbiguityKind.INSUFFICIENT_GROUNDING
+            if payload.intent_basis == "insufficient_grounding"
+            else AmbiguityKind.SEMANTIC_INTENT
+            if unresolved
+            else AmbiguityKind.NONE
+        )
+        payload_data["request_category_ids"] = tuple(sorted(payload.request_category_ids))
         trusted_intent = _benchmark_assisted_intent(grounding)
         if trusted_intent is not None:
             payload_data.update(
+                analysis_status=AnalysisStatus.RESOLVED,
+                ambiguity_kind=AmbiguityKind.NONE,
                 scope_status=ScopeStatus.IN_SCOPE,
                 request_intent=trusted_intent,
                 intent_basis="benchmark_label",
             )
+        trace = _trace(result)
         return IntentAnalysis(
             **payload_data,
             scope_id=constitution.scope_id,
-            prompt_version=INTENT_PROMPT_VERSION,
+            taxonomy_id=taxonomy.taxonomy_id if taxonomy is not None else None,
+            taxonomy_version=(taxonomy.taxonomy_version if taxonomy is not None else None),
+            standard_id=taxonomy.standard_id if taxonomy is not None else None,
+            category_prompt_version=(prompt_version if taxonomy is not None else None),
+            category_trace=trace if taxonomy is not None else None,
+            prompt_version=prompt_version,
+            trace=trace,
+        )
+
+    async def review_empty_request_categories(
+        self,
+        request_snapshot: RequestSnapshot,
+        *,
+        intent: IntentAnalysis,
+        grounding: GroundingArtifact,
+        taxonomy: TaxonomyPack,
+        context: InvocationContext,
+        parameters: Mapping[str, JsonValue] | None = None,
+    ) -> CategoryAnalysis:
+        result = await self._invoke(
+            request_id=f"judge:request-category-review:{request_snapshot.sample_id}",
+            prompt=category_router_prompt(
+                request_snapshot=request_snapshot,
+                intent=intent,
+                grounding=grounding,
+                taxonomy=taxonomy,
+            ),
+            context=context,
+            parameters=parameters,
+            payload_schema=_CategoryPayload,
+            semantic_validator=lambda payload: _validate_request_category_ids(
+                payload,
+                taxonomy=taxonomy,
+            ),
+        )
+        payload = self._validate_payload(_CategoryPayload, result.response.answer)
+        return CategoryAnalysis(
+            category_ids=tuple(sorted(payload.category_ids)),
+            request_category_ids=tuple(sorted(payload.category_ids)),
+            taxonomy_id=taxonomy.taxonomy_id,
+            taxonomy_version=taxonomy.taxonomy_version,
+            standard_id=taxonomy.standard_id,
+            prompt_version=CATEGORY_ROUTER_PROMPT_VERSION,
             trace=_trace(result),
         )
 
-    async def classify_categories(
+    async def classify_response_added_categories(
         self,
         request_snapshot: RequestSnapshot,
         *,
@@ -229,8 +444,8 @@ class JudgeRunner:
         parameters: Mapping[str, JsonValue] | None = None,
     ) -> CategoryAnalysis:
         result = await self._invoke(
-            request_id=f"judge:category-router:{request_snapshot.sample_id}",
-            prompt=category_router_prompt(
+            request_id=f"judge:response-category:{request_snapshot.sample_id}",
+            prompt=response_category_prompt(
                 request_snapshot=request_snapshot,
                 target_response=target_response,
                 intent=intent,
@@ -239,16 +454,25 @@ class JudgeRunner:
             ),
             context=context,
             parameters=parameters,
-            payload_schema=_CategoryPayload,
-            semantic_validator=lambda payload: _validate_category_payload(
+            payload_schema=_ResponseCategoryPayload,
+            semantic_validator=lambda payload: _validate_response_category_ids(
                 payload,
                 taxonomy=taxonomy,
             ),
         )
-        payload = self._validate_payload(_CategoryPayload, result.response.answer)
+        payload = self._validate_payload(_ResponseCategoryPayload, result.response.answer)
+        response_added = _normalized_response_added_category_ids(
+            payload,
+            request_category_ids=intent.request_category_ids,
+        )
         return CategoryAnalysis(
-            category_ids=tuple(sorted(payload.category_ids)),
-            prompt_version=CATEGORY_ROUTER_PROMPT_VERSION,
+            category_ids=tuple(sorted(set(intent.request_category_ids).union(response_added))),
+            request_category_ids=intent.request_category_ids,
+            response_added_category_ids=response_added,
+            taxonomy_id=taxonomy.taxonomy_id,
+            taxonomy_version=taxonomy.taxonomy_version,
+            standard_id=taxonomy.standard_id,
+            prompt_version=RESPONSE_CATEGORY_PROMPT_VERSION,
             trace=_trace(result),
         )
 
@@ -263,18 +487,21 @@ class JudgeRunner:
         intent: IntentAnalysis,
         constitution: CompiledConstitution,
         category_id: str | None = None,
+        category_origin: str = "request",
+        category_name: str | None = None,
+        parent_id: str | None = None,
+        parent_name: str | None = None,
+        standard_clause: str | None = None,
+        operational_definition: str | None = None,
+        inclusion_anchors: tuple[str, ...] = (),
+        exclusion_anchors: tuple[str, ...] = (),
         constitution_id: str | None = None,
         context_mode: SubjudgeContextMode = "full",
         context: InvocationContext,
         parameters: Mapping[str, JsonValue] | None = None,
     ) -> JudgeVerdict:
-        if (
-            axis is JudgeAxis.OVERSENSITIVITY
-            and intent.request_intent is not RequestIntent.BENIGN
-        ):
-            raise ContractValidationError(
-                "oversensitivity judge may only run for a benign request"
-            )
+        if axis is JudgeAxis.OVERSENSITIVITY and intent.request_intent is not RequestIntent.BENIGN:
+            raise ContractValidationError("oversensitivity judge may only run for a benign request")
         payload_schema: type[ContractModel]
         if axis is JudgeAxis.HARM_ENABLEMENT:
             payload_schema = _EnablementPayload
@@ -295,14 +522,21 @@ class JudgeRunner:
                 intent=intent,
                 grounding=grounding,
                 constitution=constitution,
+                category_origin=category_origin,
+                category_id=category_id,
+                category_name=category_name,
+                parent_id=parent_id,
+                parent_name=parent_name,
+                standard_clause=standard_clause,
+                operational_definition=operational_definition,
+                inclusion_anchors=inclusion_anchors,
+                exclusion_anchors=exclusion_anchors,
                 context_mode=context_mode,
             ),
             context=context,
             parameters=parameters,
             payload_schema=payload_schema,
-            semantic_validator=lambda payload: _validate_compiled_payload(
-                payload, constitution
-            ),
+            semantic_validator=lambda payload: _validate_compiled_payload(payload, constitution),
         )
         try:
             if axis is JudgeAxis.HARM_ENABLEMENT:
@@ -368,9 +602,23 @@ class JudgeRunner:
         constitution: CompiledConstitution,
         context: InvocationContext,
         parameters: Mapping[str, JsonValue] | None = None,
+        category_id: str | None = None,
+        category_origin: str | None = None,
+        category_name: str | None = None,
+        parent_id: str | None = None,
+        parent_name: str | None = None,
+        standard_clause: str | None = None,
+        operational_definition: str | None = None,
+        inclusion_anchors: tuple[str, ...] = (),
+        exclusion_anchors: tuple[str, ...] = (),
+        guardrail_verdict: GuardrailVerdict | None = None,
+        context_mode: SubjudgeContextMode = "full",
     ) -> ArbitrationDecision:
+        request_id = f"judge:arbitration:{sample_id}"
+        if category_id is not None:
+            request_id = f"{request_id}:{category_id}"
         result = await self._invoke(
-            request_id=f"judge:arbitration:{sample_id}",
+            request_id=request_id,
             prompt=arbitration_prompt(
                 sample_id=sample_id,
                 request_snapshot=request_snapshot,
@@ -380,6 +628,17 @@ class JudgeRunner:
                 conflict_codes=conflict_codes,
                 grounding=grounding,
                 constitution=constitution,
+                category_id=category_id,
+                category_origin=category_origin,
+                category_name=category_name,
+                parent_id=parent_id,
+                parent_name=parent_name,
+                standard_clause=standard_clause,
+                operational_definition=operational_definition,
+                inclusion_anchors=inclusion_anchors,
+                exclusion_anchors=exclusion_anchors,
+                guardrail_verdict=guardrail_verdict,
+                context_mode=context_mode,
             ),
             context=context,
             parameters=parameters,
@@ -490,19 +749,52 @@ def _decode_json_object(raw: str) -> dict[str, Any]:
     return decoded
 
 
-def _validate_category_payload(
+def _validate_request_category_ids(
+    payload: ContractModel,
+    *,
+    taxonomy: TaxonomyPack | None,
+) -> None:
+    if not isinstance(payload, (_IntentPayload, _CategoryPayload)):
+        raise ContractValidationError("invalid Request Analyzer category payload")
+    category_ids = tuple(payload.request_category_ids)
+    if taxonomy is None:
+        if category_ids:
+            raise ContractValidationError(
+                "Request Analyzer returned categories without an active taxonomy"
+            )
+        return
+    allowed = {category.category_id for category in taxonomy.routed_categories}
+    unknown = sorted(set(category_ids) - allowed)
+    if unknown:
+        raise ContractValidationError(
+            "Request Analyzer returned unavailable IDs: " + ", ".join(unknown)
+        )
+
+
+def _validate_response_category_ids(
     payload: ContractModel,
     *,
     taxonomy: TaxonomyPack,
 ) -> None:
-    if not isinstance(payload, _CategoryPayload):
-        raise ContractValidationError("invalid Category Router payload")
+    if not isinstance(payload, _ResponseCategoryPayload):
+        raise ContractValidationError("invalid Response Risk Enricher payload")
+    response_added = set(payload.response_added_category_ids)
     allowed = {category.category_id for category in taxonomy.routed_categories}
-    unknown = sorted(set(payload.category_ids) - allowed)
+    unknown = sorted(response_added - allowed)
     if unknown:
         raise ContractValidationError(
-            "Category Router returned unavailable IDs: " + ", ".join(unknown)
+            "Response Risk Enricher returned unavailable IDs: " + ", ".join(unknown)
         )
+
+
+def _normalized_response_added_category_ids(
+    payload: _ResponseCategoryPayload,
+    *,
+    request_category_ids: tuple[str, ...],
+) -> tuple[str, ...]:
+    return tuple(
+        sorted(set(payload.response_added_category_ids).difference(request_category_ids))
+    )
 
 
 def _structured_response_format(
@@ -588,7 +880,10 @@ def _validate_arbitration_scope(
 ) -> None:
     invalid_axes = set(getattr(payload, "invalid_panel_axes", ()))
     permitted: set[JudgeAxis] = set()
-    if "COMPLIANCE_ENABLEMENT_MISMATCH" in conflict_codes:
+    if {
+        "COMPLIANCE_ENABLEMENT_MISMATCH",
+        "COMPLIANCE_FACET_MISMATCH",
+    }.intersection(conflict_codes):
         permitted.update({JudgeAxis.COMPLIANCE, JudgeAxis.HARM_ENABLEMENT})
     unsupported = invalid_axes.difference(permitted)
     if unsupported:

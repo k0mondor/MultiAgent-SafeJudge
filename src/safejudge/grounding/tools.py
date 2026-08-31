@@ -45,9 +45,7 @@ class _ModelObservationPayload(ContractModel):
     @model_validator(mode="after")
     def contains_observable_content(self) -> _ModelObservationPayload:
         if not self.text.strip() and not self.description and not self.visual_context:
-            raise ValueError(
-                "grounding observation requires text, description, or visual_context"
-            )
+            raise ValueError("grounding observation requires text, description, or visual_context")
         return self
 
 
@@ -105,9 +103,7 @@ def load_sidecar_observations(
                 continue
             observation = RawGroundingObservation.model_validate(json.loads(line))
             if observation.media_sha256 is None:
-                raise ValueError(
-                    f"sidecar observation at line {line_number} requires media_sha256"
-                )
+                raise ValueError(f"sidecar observation at line {line_number} requires media_sha256")
             grouped.setdefault(observation.media_sha256, []).append(observation)
     except (OSError, json.JSONDecodeError, ValidationError, ValueError) as error:
         raise ContractValidationError(f"invalid grounding sidecar {path}: {error}") from error
@@ -157,9 +153,7 @@ class ModelGroundingTool:
         media: MediaRef,
         context: InvocationContext,
     ) -> tuple[RawGroundingObservation, ...]:
-        base_request_id = (
-            f"grounding:{self.tool_id}:{sample_id}:{media.sha256 or 'unhashed'}"
-        )
+        base_request_id = f"grounding:{self.tool_id}:{sample_id}:{media.sha256 or 'unhashed'}"
         last_contract_error: ContractValidationError | None = None
         for attempt in range(self.max_contract_retries + 1):
             parameters = dict(self.parameters)
@@ -168,9 +162,7 @@ class ModelGroundingTool:
                 parameters.update(self.retry_parameters[retry_index])
             request = self._build_request(
                 request_id=(
-                    base_request_id
-                    if attempt == 0
-                    else f"{base_request_id}:repair:{attempt}"
+                    base_request_id if attempt == 0 else f"{base_request_id}:repair:{attempt}"
                 ),
                 media=media,
                 parameters=parameters,
@@ -179,10 +171,7 @@ class ModelGroundingTool:
             try:
                 result = await self.invoker.invoke(request, context=context)
             except ProviderError as error:
-                if (
-                    error.kind not in _ADAPTIVE_RETRY_KINDS
-                    or attempt >= self.max_contract_retries
-                ):
+                if error.kind not in _ADAPTIVE_RETRY_KINDS or attempt >= self.max_contract_retries:
                     raise
                 continue
             try:
@@ -252,7 +241,7 @@ class ModelGroundingTool:
     ) -> tuple[RawGroundingObservation, ...]:
         response = result.response
         try:
-            decoded = json.loads(response.answer)
+            decoded = _decode_model_json(response.answer)
             decoded = _normalize_model_payload(decoded, media_type=media.media_type)
             payload = _ModelGroundingPayload.model_validate(decoded)
             return self._to_raw_observations(
@@ -279,9 +268,7 @@ class ModelGroundingTool:
         modality = self._modality_by_media_type[media.media_type]
         observations: list[RawGroundingObservation] = []
         for item in payload.observations:
-            item_payload = item.model_dump(
-                exclude={"text", "description", "visual_context"}
-            )
+            item_payload = item.model_dump(exclude={"text", "description", "visual_context"})
             bbox = item_payload.get("bbox")
             if bbox is not None and any(value < 0 or value > 1 for value in bbox):
                 # Pixel coordinates cannot be normalized without a trustworthy
@@ -295,11 +282,11 @@ class ModelGroundingTool:
                 text = f"{text}\nVisual context: {item.visual_context}"
             observations.append(
                 RawGroundingObservation(
-                **item_payload,
-                text=text,
-                modality=modality,
-                media_type=media.media_type,
-                media_sha256=media.sha256,
+                    **item_payload,
+                    text=text,
+                    modality=modality,
+                    media_type=media.media_type,
+                    media_sha256=media.sha256,
                     tool_id=self.tool_id,
                     tool_version=self.tool_version,
                     call_id=call_id,
@@ -307,6 +294,26 @@ class ModelGroundingTool:
                 )
             )
         return tuple(observations)
+
+
+def _decode_model_json(raw: str) -> object:
+    """Decode schema output while tolerating common OCR serialization wrappers."""
+
+    value = raw.strip()
+    if value.startswith("```") and value.endswith("```"):
+        lines = value.splitlines()
+        if len(lines) >= 3 and lines[0].strip().startswith("```"):
+            value = "\n".join(lines[1:-1]).strip()
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError as strict_error:
+        try:
+            # Some multimodal providers emit literal OCR newlines inside JSON
+            # strings. Python's non-strict decoder accepts those control
+            # characters without changing the observed text.
+            return json.loads(value, strict=False)
+        except json.JSONDecodeError as relaxed_error:
+            raise strict_error from relaxed_error
 
 
 def _normalize_model_payload(value: object, *, media_type: MediaType) -> object:

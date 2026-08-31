@@ -36,7 +36,7 @@ class GuardrailIdentity(ContractModel):
 
 
 class JuryPlan(ContractModel):
-    """Complete main Judge with an optional per-category guardrail sub-agent."""
+    """Main Judge plus an optional per-category guardrail Compliance judge."""
 
     schema_version: Literal["2.0"] = "2.0"
     jury_id: str = Field(min_length=1, pattern=r"^[a-z0-9][a-z0-9._-]*$")
@@ -48,9 +48,7 @@ class JuryPlan(ContractModel):
 
     @model_validator(mode="after")
     def guardrail_fields_are_paired(self) -> JuryPlan:
-        if (self.category_guardrail_profile is None) != (
-            self.category_guardrail_policy is None
-        ):
+        if (self.category_guardrail_profile is None) != (self.category_guardrail_policy is None):
             raise ValueError(
                 "category_guardrail_profile and category_guardrail_policy "
                 "must be configured together"
@@ -91,9 +89,7 @@ class JuryPlan(ContractModel):
                 raise ConfigurationError(
                     "category guardrail profile must use judge_adapter='llama_guard'"
                 )
-            guardrail_policy = GuardrailPolicy.load(
-                Path(str(self.category_guardrail_policy))
-            )
+            guardrail_policy = GuardrailPolicy.load(Path(str(self.category_guardrail_policy)))
         identity = JuryIdentity.from_profiles(
             jury_id=self.jury_id,
             version=self.version,
@@ -135,9 +131,7 @@ class JuryIdentity(ContractModel):
         subjudge_context_mode: SubjudgeContextMode | None = None,
     ) -> JuryIdentity:
         if (guardrail_profile is None) != (guardrail_policy is None):
-            raise ConfigurationError(
-                "guardrail profile and policy must be supplied together"
-            )
+            raise ConfigurationError("guardrail profile and policy must be supplied together")
         guardrail_identity = None
         if guardrail_profile is not None and guardrail_policy is not None:
             guardrail_identity = GuardrailIdentity(
@@ -205,9 +199,7 @@ class JuryDefinition:
             or identity.profile_hash != profile.fingerprint
         ):
             raise ConfigurationError("Judge profile does not match run identity")
-        if (category_guardrail_profile is None) != (
-            category_guardrail_policy is None
-        ):
+        if (category_guardrail_profile is None) != (category_guardrail_policy is None):
             raise ConfigurationError(
                 "category guardrail profile and policy must be supplied together"
             )

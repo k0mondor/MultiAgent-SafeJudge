@@ -502,6 +502,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "cache_misses": evaluation_result.manifest.cache_miss_count,
                     "billed_cost_usd": str(evaluation_result.manifest.billed_cost_usd),
                     "levels": evaluation_result.manifest.compliance_level_counts,
+                    "aggregator": {
+                        "id": evaluation_result.manifest.aggregator_id,
+                        "version": evaluation_result.manifest.aggregator_version,
+                        "hash": evaluation_result.manifest.aggregator_hash,
+                    },
                     "category_hits": evaluation_result.manifest.category_hit_counts,
                     "category_levels": evaluation_result.manifest.category_level_counts,
                     "guardrail_triggers": (

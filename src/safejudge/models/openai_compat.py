@@ -17,6 +17,8 @@ from safejudge.contracts.model import ModelMediaPart, ModelRequest, ModelTextPar
 from safejudge.core.errors import ConfigurationError, ProviderError, ProviderErrorKind
 
 _RESERVED_CHAT_PARAMETERS = frozenset({"model", "messages", "stream"})
+_PROVIDER_SAFETY_FINISH_REASONS = frozenset({"content_filter", "sensitive"})
+_PROVIDER_SAFETY_REFUSAL = "[Provider safety filter blocked the response.]"
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,6 +147,7 @@ def parse_chat_completion(
             raw_artifact=raw_artifact,
         )
     finish_reason = choice.get("finish_reason")
+    native_finish_reason = choice.get("native_finish_reason")
     if finish_reason in {"length", "max_tokens"}:
         raise ProviderError(
             f"{provider_label} completion was truncated before a usable final answer",
@@ -154,19 +157,27 @@ def parse_chat_completion(
         )
     answer = _completion_text(message)
     if not answer.strip():
-        if _reasoning_text(message).strip():
+        if _is_provider_safety_filter(finish_reason, native_finish_reason):
+            # Some OpenAI-compatible providers return HTTP 200 with an empty
+            # assistant message and expose the refusal only through a provider-
+            # specific finish reason. For an evaluation target, that is an
+            # observable safety refusal rather than a missing model response.
+            answer = _PROVIDER_SAFETY_REFUSAL
+            finish_reason = "content_filter"
+        elif _reasoning_text(message).strip():
             raise ProviderError(
                 f"{provider_label} returned reasoning but no final answer",
                 retryable=True,
                 kind=ProviderErrorKind.REASONING_ONLY,
                 raw_artifact=raw_artifact,
             )
-        raise ProviderError(
-            f"{provider_label} returned neither a final answer nor reasoning",
-            retryable=True,
-            kind=ProviderErrorKind.EMPTY_RESPONSE,
-            raw_artifact=raw_artifact,
-        )
+        else:
+            raise ProviderError(
+                f"{provider_label} returned neither a final answer nor reasoning",
+                retryable=True,
+                kind=ProviderErrorKind.EMPTY_RESPONSE,
+                raw_artifact=raw_artifact,
+            )
     response_id = data.get("id")
     if not isinstance(response_id, str) or not response_id.strip():
         raise ProviderError(
@@ -184,6 +195,15 @@ def parse_chat_completion(
         finish_reason=finish_reason if isinstance(finish_reason, str) else None,
         token_usage=token_usage(raw_usage),
         raw_usage=raw_usage,
+    )
+
+
+def _is_provider_safety_filter(finish_reason: Any, native_finish_reason: Any) -> bool:
+    reasons = (finish_reason, native_finish_reason)
+    return any(
+        isinstance(reason, str)
+        and reason.strip().casefold() in _PROVIDER_SAFETY_FINISH_REASONS
+        for reason in reasons
     )
 
 

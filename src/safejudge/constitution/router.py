@@ -13,7 +13,7 @@ from safejudge.constitution.contracts import ConstitutionPack
 from safejudge.constitution.registry import ConstitutionRegistry
 from safejudge.contracts.base import ContractModel
 from safejudge.contracts.dataset import RequestIntent
-from safejudge.contracts.judging import IntentAnalysis, ScopeStatus
+from safejudge.contracts.judging import AnalysisStatus, IntentAnalysis, ScopeStatus
 from safejudge.grounding.contracts import (
     GroundingArtifact,
     GroundingMode,
@@ -47,9 +47,14 @@ class CategoryConstitutionBinding(ContractModel):
     """One selected standard category bound to one executable policy pack."""
 
     category_id: str
+    category_origin: Literal["request", "response_added"] = "request"
     category_name: str
     parent_id: str | None = None
+    parent_name: str | None = None
     standard_clause: str
+    operational_definition: str
+    inclusion_anchors: tuple[str, ...]
+    exclusion_anchors: tuple[str, ...]
     constitution_id: str
     constitution_version: str
     constitution_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
@@ -80,15 +85,11 @@ def route_constitution(
     intent: IntentAnalysis,
     grounding: GroundingArtifact,
 ) -> ConstitutionRoute:
-    if (
-        intent.scope_id != pack.scope_id
-        or grounding.status is not GroundingStatus.COMPLETE
-    ):
-        scope_status = ScopeStatus.AMBIGUOUS
+    if intent.scope_id != pack.scope_id or grounding.status is not GroundingStatus.COMPLETE:
+        scope_status = ScopeStatus.UNKNOWN
     elif grounding.mode is GroundingMode.BENCHMARK_ASSISTED:
         has_label = any(
-            item.modality is ObservationModality.BENCHMARK_LABEL
-            for item in grounding.observations
+            item.modality is ObservationModality.BENCHMARK_LABEL for item in grounding.observations
         )
         scope_status = (
             ScopeStatus.IN_SCOPE
@@ -97,21 +98,22 @@ def route_constitution(
                 intent.request_intent in {RequestIntent.BENIGN, RequestIntent.HARMFUL}
                 or intent.scope_status is ScopeStatus.IN_SCOPE
             )
-            else ScopeStatus.AMBIGUOUS
+            else ScopeStatus.UNKNOWN
         )
     else:
         scope_status = intent.scope_status
     if scope_status is ScopeStatus.OUT_OF_SCOPE:
         action = ConstitutionRouteAction.NOT_EVALUATED
-    elif scope_status is ScopeStatus.AMBIGUOUS:
+    elif scope_status in {ScopeStatus.AMBIGUOUS, ScopeStatus.UNKNOWN} or (
+        getattr(intent, "analysis_status", AnalysisStatus.RESOLVED)
+        is AnalysisStatus.REVIEW_REQUIRED
+    ):
         action = ConstitutionRouteAction.REVIEW_REQUIRED
     else:
         action = ConstitutionRouteAction.EVALUATE
     scenarios = {
         grounding.mode.value,
-        "benign"
-        if intent.request_intent is RequestIntent.BENIGN
-        else "non_benign",
+        "benign" if intent.request_intent is RequestIntent.BENIGN else "non_benign",
     }
     payload = {
         "router_version": "constitution-router-v2",
@@ -137,6 +139,7 @@ def route_categories(
     intent: IntentAnalysis,
     grounding: GroundingArtifact,
     category_ids: tuple[str, ...],
+    response_added_category_ids: tuple[str, ...] = (),
 ) -> MultiCategoryRoute:
     """Route zero or more request/response leaf categories to Constitution packs.
 
@@ -145,33 +148,41 @@ def route_categories(
     taxonomy and emits one binding per category/Constitution pair.
     """
 
-    enabled = {
-        category.category_id: category for category in taxonomy.routed_categories
-    }
+    enabled = {category.category_id: category for category in taxonomy.routed_categories}
+    all_categories = {category.category_id: category for category in taxonomy.categories}
     unknown = sorted(set(category_ids) - set(enabled))
     if unknown:
         raise ValueError(
-            "intent selected categories that are not routing-enabled: "
-            + ", ".join(unknown)
+            "intent selected categories that are not routing-enabled: " + ", ".join(unknown)
         )
     selected_ids = tuple(sorted(set(category_ids)))
+    response_added_ids = set(response_added_category_ids)
+    if not response_added_ids.issubset(selected_ids):
+        raise ValueError("response-added categories must be included in category_ids")
     if grounding.status is not GroundingStatus.COMPLETE or (
         grounding.mode is GroundingMode.BENCHMARK_ASSISTED
         and not any(
-            item.modality is ObservationModality.BENCHMARK_LABEL
-            for item in grounding.observations
+            item.modality is ObservationModality.BENCHMARK_LABEL for item in grounding.observations
         )
     ):
-        scope_status = ScopeStatus.AMBIGUOUS
+        scope_status = ScopeStatus.UNKNOWN
     else:
         scope_status = intent.scope_status
 
-    if scope_status is ScopeStatus.AMBIGUOUS:
+    if scope_status in {ScopeStatus.AMBIGUOUS, ScopeStatus.UNKNOWN} or (
+        getattr(intent, "analysis_status", AnalysisStatus.RESOLVED)
+        is AnalysisStatus.REVIEW_REQUIRED
+    ):
         action = ConstitutionRouteAction.REVIEW_REQUIRED
     elif scope_status is ScopeStatus.OUT_OF_SCOPE:
         action = ConstitutionRouteAction.NOT_EVALUATED
     elif not selected_ids and intent.request_intent is RequestIntent.HARMFUL:
         action = ConstitutionRouteAction.REVIEW_REQUIRED
+    elif not selected_ids and intent.request_intent is RequestIntent.BENIGN:
+        # A benign request does not need a fabricated risk leaf.  It still enters
+        # evaluation so the one global oversensitivity judge can inspect whether
+        # the target refused or over-restricted an otherwise allowed request.
+        action = ConstitutionRouteAction.EVALUATE
     elif not selected_ids:
         action = ConstitutionRouteAction.NOT_EVALUATED
     else:
@@ -185,9 +196,22 @@ def route_categories(
             bindings.append(
                 {
                     "category_id": category.category_id,
+                    "category_origin": (
+                        "response_added"
+                        if category.category_id in response_added_ids
+                        else "request"
+                    ),
                     "category_name": category.category_name,
                     "parent_id": category.parent_id,
+                    "parent_name": (
+                        all_categories[category.parent_id].category_name
+                        if category.parent_id is not None
+                        else None
+                    ),
                     "standard_clause": category.standard_clause,
+                    "operational_definition": category.operational_definition,
+                    "inclusion_anchors": category.inclusion_anchors,
+                    "exclusion_anchors": category.exclusion_anchors,
                     "constitution_id": pack.constitution_id,
                     "constitution_version": pack.version,
                     "constitution_hash": pack.constitution_hash,

@@ -27,4 +27,3 @@ class DatasetManifest(ContractModel):
     modality_counts: dict[str, int]
     request_intent_counts: dict[str, int]
     created_at: datetime = Field(default_factory=utc_now)
-
