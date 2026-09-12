@@ -15,7 +15,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.runtime import Runtime
 from langgraph.types import Send
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from safejudge.aggregation import ShiftedProductPolicy, load_default_aggregation_policy
 from safejudge.constitution.compiler import (
@@ -163,9 +163,7 @@ class EvaluationState(BaseModel):
         tuple[GuardrailExecutionFailure, ...], _merge_guardrail_failures
     ] = ()
     category_results: tuple[CategoryEvaluationResult, ...] = ()
-    routed_axes: tuple[JudgeAxis, ...] = ()
     aggregate: AggregateDecision | None = None
-    arbitration: ArbitrationDecision | None = None
     result: EvaluationResult | None = None
 
 
@@ -181,8 +179,8 @@ class EvaluationContext(BaseModel):
     invocation: InvocationContext
     jury: JuryRuntime
     constitution_pack: ConstitutionPack
-    taxonomy_pack: TaxonomyPack | None = None
-    constitution_registry: ConstitutionRegistry | None = None
+    taxonomy_pack: TaxonomyPack
+    constitution_registry: ConstitutionRegistry
     grounding_pipeline: GroundingPipeline = Field(
         default_factory=lambda: GroundingPipeline(mode=GroundingMode.BENCHMARK_ASSISTED)
     )
@@ -193,13 +191,6 @@ class EvaluationContext(BaseModel):
         default_factory=load_default_aggregation_policy
     )
     node_ledger: NodeLedger | None = None
-
-    @model_validator(mode="after")
-    def taxonomy_dependencies_are_paired(self) -> EvaluationContext:
-        if (self.taxonomy_pack is None) != (self.constitution_registry is None):
-            raise ValueError("taxonomy_pack and constitution_registry must be provided together")
-        return self
-
 
 class JudgeTaskInput(ContractModel):
     sample_id: str
@@ -398,18 +389,10 @@ def create_evaluation_identity(
         constitution_hash=context.constitution_pack.constitution_hash,
         constitution_router_version="constitution-router-v2",
         scope_id=context.constitution_pack.scope_id,
-        taxonomy_id=(
-            context.taxonomy_pack.taxonomy_id if context.taxonomy_pack is not None else None
-        ),
-        taxonomy_version=(
-            context.taxonomy_pack.taxonomy_version if context.taxonomy_pack is not None else None
-        ),
-        taxonomy_hash=(
-            context.taxonomy_pack.taxonomy_hash if context.taxonomy_pack is not None else None
-        ),
-        standard_id=(
-            context.taxonomy_pack.standard_id if context.taxonomy_pack is not None else None
-        ),
+        taxonomy_id=context.taxonomy_pack.taxonomy_id,
+        taxonomy_version=context.taxonomy_pack.taxonomy_version,
+        taxonomy_hash=context.taxonomy_pack.taxonomy_hash,
+        standard_id=context.taxonomy_pack.standard_id,
         grounding_mode=context.grounding_pipeline.mode.value,
         grounding_pipeline_id=context.grounding_pipeline.pipeline_id,
         grounding_pipeline_version=context.grounding_pipeline.pipeline_version,
@@ -490,8 +473,7 @@ async def _request_analysis(
                 parameters=runtime.context.judge_parameters,
             )
         if (
-            taxonomy is not None
-            and intent.scope_status is ScopeStatus.OUT_OF_SCOPE
+            intent.scope_status is ScopeStatus.OUT_OF_SCOPE
             and grounding.status is GroundingStatus.COMPLETE
         ):
             intent = await runtime.context.jury.intent.review_out_of_scope(
@@ -504,8 +486,6 @@ async def _request_analysis(
                 parameters=runtime.context.judge_parameters,
             )
         output: dict[str, IntentAnalysis | CategoryAnalysis] = {"intent_analysis": intent}
-        if taxonomy is None:
-            return _record_output(span, output)
         category_analysis = CategoryAnalysis(
             category_ids=intent.request_category_ids,
             request_category_ids=intent.request_category_ids,
@@ -547,8 +527,6 @@ async def _response_category_enrichment(
     config: RunnableConfig,
 ) -> dict[str, CategoryAnalysis]:
     taxonomy = runtime.context.taxonomy_pack
-    if taxonomy is None:
-        return {}
     async with _track_node(
         runtime=runtime,
         config=config,
@@ -573,10 +551,7 @@ async def _constitution_route(
     state: EvaluationState,
     runtime: Runtime[EvaluationContext],
     config: RunnableConfig,
-) -> dict[
-    str,
-    ConstitutionRoute | MultiCategoryRoute | tuple[JudgeAxis, ...] | None,
-]:
+) -> dict[str, ConstitutionRoute | MultiCategoryRoute]:
     async with _track_node(
         runtime=runtime,
         config=config,
@@ -592,37 +567,28 @@ async def _constitution_route(
             intent=intent,
             grounding=grounding,
         )
-        axes = [JudgeAxis.COMPLIANCE, JudgeAxis.HARM_ENABLEMENT]
-        if intent.request_intent is RequestIntent.BENIGN:
-            axes.append(JudgeAxis.OVERSENSITIVITY)
-        category_route: MultiCategoryRoute | None = None
-        if runtime.context.taxonomy_pack is not None:
-            registry = runtime.context.constitution_registry
-            analysis = state.category_analysis
-            if registry is None or analysis is None:
-                raise ContractValidationError(
-                    "taxonomy evaluation requires category analysis and registry"
-                )
-            if tuple(sorted(intent.request_category_ids)) != tuple(
-                sorted(analysis.request_category_ids)
-            ):
-                raise ContractValidationError(
-                    "Request Analyzer categories differ from compatibility route view"
-                )
-            category_route = route_categories(
-                runtime.context.taxonomy_pack,
-                registry,
-                intent=intent,
-                grounding=grounding,
-                category_ids=analysis.category_ids,
-                response_added_category_ids=analysis.response_added_category_ids,
+        analysis = state.category_analysis
+        if analysis is None:
+            raise ContractValidationError("taxonomy evaluation requires category analysis")
+        if tuple(sorted(intent.request_category_ids)) != tuple(
+            sorted(analysis.request_category_ids)
+        ):
+            raise ContractValidationError(
+                "Request Analyzer categories differ from compatibility route view"
             )
+        category_route = route_categories(
+            runtime.context.taxonomy_pack,
+            runtime.context.constitution_registry,
+            intent=intent,
+            grounding=grounding,
+            category_ids=analysis.category_ids,
+            response_added_category_ids=analysis.response_added_category_ids,
+        )
         return _record_output(
             span,
             {
                 "constitution_route": route,
                 "category_route": category_route,
-                "routed_axes": tuple(axes),
             },
         )
 
@@ -630,50 +596,8 @@ async def _constitution_route(
 def _fan_out_panel(state: EvaluationState) -> list[Send]:
     response = _require_target_response(state)
     intent = _require_intent(state)
-    if state.category_route is not None:
-        tasks = [
-            Send(
-                _judge_node_name(axis),
-                JudgeTaskInput(
-                    sample_id=state.sample.sample_id,
-                    evaluation_key=_require_evaluation_spec(state).evaluation_key,
-                    request_snapshot=_require_request_snapshot(state),
-                    target_response=response,
-                    grounding_artifact=_require_grounding(state),
-                    intent_analysis=intent,
-                    constitution_scenarios=state.category_route.scenarios,
-                    category_id=binding.category_id,
-                    category_origin=binding.category_origin,
-                    category_name=binding.category_name,
-                    parent_id=binding.parent_id,
-                    parent_name=binding.parent_name,
-                    standard_clause=binding.standard_clause,
-                    operational_definition=binding.operational_definition,
-                    inclusion_anchors=binding.inclusion_anchors,
-                    exclusion_anchors=binding.exclusion_anchors,
-                    constitution_id=binding.constitution_id,
-                ),
-            )
-            for binding in state.category_route.bindings
-            for axis in (JudgeAxis.COMPLIANCE, JudgeAxis.HARM_ENABLEMENT)
-        ]
-        if intent.request_intent is RequestIntent.BENIGN:
-            tasks.append(
-                Send(
-                    _judge_node_name(JudgeAxis.OVERSENSITIVITY),
-                    JudgeTaskInput(
-                        sample_id=state.sample.sample_id,
-                        evaluation_key=_require_evaluation_spec(state).evaluation_key,
-                        request_snapshot=_require_request_snapshot(state),
-                        target_response=response,
-                        grounding_artifact=_require_grounding(state),
-                        intent_analysis=intent,
-                        constitution_scenarios=_require_constitution_route(state).scenarios,
-                    ),
-                )
-            )
-        return tasks
-    return [
+    category_route = _require_category_route(state)
+    tasks = [
         Send(
             _judge_node_name(axis),
             JudgeTaskInput(
@@ -683,11 +607,38 @@ def _fan_out_panel(state: EvaluationState) -> list[Send]:
                 target_response=response,
                 grounding_artifact=_require_grounding(state),
                 intent_analysis=intent,
-                constitution_scenarios=_require_constitution_route(state).scenarios,
-            ),
+                constitution_scenarios=category_route.scenarios,
+                category_id=binding.category_id,
+                category_origin=binding.category_origin,
+                category_name=binding.category_name,
+                parent_id=binding.parent_id,
+                parent_name=binding.parent_name,
+                standard_clause=binding.standard_clause,
+                operational_definition=binding.operational_definition,
+                inclusion_anchors=binding.inclusion_anchors,
+                exclusion_anchors=binding.exclusion_anchors,
+                constitution_id=binding.constitution_id,
+            )
         )
-        for axis in state.routed_axes
+        for binding in category_route.bindings
+        for axis in (JudgeAxis.COMPLIANCE, JudgeAxis.HARM_ENABLEMENT)
     ]
+    if intent.request_intent is RequestIntent.BENIGN:
+        tasks.append(
+            Send(
+                _judge_node_name(JudgeAxis.OVERSENSITIVITY),
+                JudgeTaskInput(
+                    sample_id=state.sample.sample_id,
+                    evaluation_key=_require_evaluation_spec(state).evaluation_key,
+                    request_snapshot=_require_request_snapshot(state),
+                    target_response=response,
+                    grounding_artifact=_require_grounding(state),
+                    intent_analysis=intent,
+                    constitution_scenarios=_require_constitution_route(state).scenarios,
+                ),
+            )
+        )
+    return tasks
 
 
 def _route_after_constitution(state: EvaluationState) -> list[Send] | str:
@@ -728,9 +679,7 @@ async def _route_terminal(
                         AmbiguityKind.CONTRADICTORY_EVIDENCE: "CONTRADICTORY_EVIDENCE",
                     }[_require_intent(state).ambiguity_kind],
                 )
-            elif (
-                state.category_route is not None and not state.category_route.selected_category_ids
-            ):
+            elif not _require_category_route(state).selected_category_ids:
                 conflicts = ("CATEGORY_ROUTING_EMPTY",)
             else:
                 conflicts = ("INSUFFICIENT_GROUNDING",)
@@ -924,79 +873,16 @@ async def _aggregate(
         evaluation_key=_require_evaluation_spec(state).evaluation_key,
         input_value=state,
     ) as span:
-        if state.category_route is not None:
-            category_results = tuple(
-                _aggregate_category_binding(state, runtime.context, binding)
-                for binding in state.category_route.bindings
-            )
-            top_aggregate = _aggregate_category_results(state, category_results)
-            return _record_output(
-                span,
-                {
-                    "category_results": category_results,
-                    "aggregate": top_aggregate,
-                },
-            )
-        if state.judge_failures:
-            failures = tuple(sorted(state.judge_failures, key=lambda item: item.axis.value))
-            aggregate = AggregateDecision(
-                decision_status=DecisionStatus.REVIEW_REQUIRED,
-                response_compliance_level=None,
-                provisional_level=None,
-                oversensitive=None,
-                conflict_codes=tuple(
-                    f"JUDGE_FAILURE:{failure.axis.value}:{failure.failure_code.value}"
-                    for failure in failures
-                ),
-                requires_arbitration=False,
-                resolution_source="review",
-            )
-            return _record_output(span, {"aggregate": aggregate})
-        verdicts = _ordered_verdicts(state.verdicts)
-        by_axis = {verdict.axis: verdict for verdict in verdicts}
-        enablement = by_axis[JudgeAxis.HARM_ENABLEMENT]
-        compliance = by_axis[JudgeAxis.COMPLIANCE]
-        oversensitivity = by_axis.get(JudgeAxis.OVERSENSITIVITY)
-        score, level, conflicts = _score_compliance_facets(
-            runtime.context.aggregation_policy,
-            compliance_label=compliance.label,
-            facets=enablement.enablement_scores,
+        category_results = tuple(
+            _aggregate_category_binding(state, runtime.context, binding)
+            for binding in _require_category_route(state).bindings
         )
-        aggregate_policy = compile_constitution(
-            runtime.context.constitution_pack,
-            axis="aggregation",
-            scenarios=frozenset(_require_constitution_route(state).scenarios),
-        )
-        if level is not None:
-            level = _apply_enablement_lower_bound(
-                level,
-                original_enablement_label=enablement.label,
-                minimum_level=aggregate_policy.deterministic_minimum_level,
-            )
-        oversensitive: bool | None
-        if (
-            _require_intent(state).request_intent is not RequestIntent.BENIGN
-            or oversensitivity is None
-            or oversensitivity.label is JudgeLabel.NOT_APPLICABLE
-        ):
-            oversensitive = None
-        else:
-            oversensitive = oversensitivity.label is JudgeLabel.OVERSENSITIVE
+        top_aggregate = _aggregate_category_results(state, category_results)
         return _record_output(
             span,
             {
-                "aggregate": AggregateDecision(
-                    decision_status=(
-                        DecisionStatus.REVIEW_REQUIRED if conflicts else DecisionStatus.RESOLVED
-                    ),
-                    response_compliance_level=None if conflicts else level,
-                    provisional_level=None,
-                    oversensitive=oversensitive,
-                    overall_score=None if conflicts else score,
-                    conflict_codes=conflicts,
-                    requires_arbitration=bool(conflicts),
-                    resolution_source="review" if conflicts else "deterministic",
-                )
+                "category_results": category_results,
+                "aggregate": top_aggregate,
             },
         )
 
@@ -1065,11 +951,8 @@ def _aggregate_category_binding(
             compliance_label=compliance.label,
             facets=enablement.enablement_scores,
         )
-        registry = context.constitution_registry
-        if registry is None:
-            raise ConfigurationError("category aggregation requires Constitution registry")
         aggregate_policy = compile_constitution(
-            registry.get(binding.constitution_id),
+            context.constitution_registry.get(binding.constitution_id),
             axis="aggregation",
             scenarios=frozenset(_require_category_route(state).scenarios),
             category_id=binding.category_id,
@@ -1223,10 +1106,7 @@ async def _arbitrate(
     state: EvaluationState,
     runtime: Runtime[EvaluationContext],
     config: RunnableConfig,
-) -> dict[
-    str,
-    AggregateDecision | ArbitrationDecision | tuple[CategoryEvaluationResult, ...],
-]:
+) -> dict[str, AggregateDecision | tuple[CategoryEvaluationResult, ...]]:
     async with _track_node(
         runtime=runtime,
         config=config,
@@ -1235,87 +1115,16 @@ async def _arbitrate(
         evaluation_key=_require_evaluation_spec(state).evaluation_key,
         input_value=state,
     ) as span:
-        response = _require_target_response(state)
-        intent = _require_intent(state)
-        aggregate = _require_aggregate(state)
-        if state.category_route is not None:
-            category_results = await _arbitrate_category_results(
-                state,
-                runtime.context,
-            )
-            return _record_output(
-                span,
-                {
-                    "category_results": category_results,
-                    "aggregate": _aggregate_category_results(state, category_results),
-                },
-            )
-        verdicts = _ordered_verdicts(state.verdicts)
-        arbitration = await runtime.context.jury.arbitration.arbitrate(
-            sample_id=state.sample.sample_id,
-            request_snapshot=_require_request_snapshot(state),
-            target_response=response,
-            grounding=_require_grounding(state),
-            intent=intent,
-            verdicts=verdicts,
-            conflict_codes=aggregate.conflict_codes,
-            constitution=compile_constitution(
-                runtime.context.constitution_pack,
-                axis="arbitration",
-                scenarios=frozenset(_require_constitution_route(state).scenarios),
-            ),
-            context=runtime.context.invocation,
-            parameters=runtime.context.judge_parameters,
+        category_results = await _arbitrate_category_results(
+            state,
+            runtime.context,
         )
-        if arbitration.resolution_status is ArbitrationResolutionStatus.REVIEW_REQUIRED:
-            resolved_aggregate = _updated_aggregate(
-                aggregate,
-                decision_status=DecisionStatus.REVIEW_REQUIRED,
-                response_compliance_level=None,
-                provisional_level=aggregate.response_compliance_level,
-                resolution_source="review",
-            )
-        else:
-            by_axis = {verdict.axis: verdict for verdict in verdicts}
-            compliance_label = (
-                arbitration.reconciled_compliance_label or by_axis[JudgeAxis.COMPLIANCE].label
-            )
-            enablement_scores = (
-                arbitration.reconciled_enablement_scores
-                or by_axis[JudgeAxis.HARM_ENABLEMENT].enablement_scores
-            )
-            if enablement_scores is None:
-                raise ContractValidationError("arbitration lost enablement facet scores")
-            score, level, remaining_conflicts = _score_compliance_facets(
-                runtime.context.aggregation_policy,
-                compliance_label=compliance_label,
-                facets=enablement_scores,
-            )
-            aggregate_policy = compile_constitution(
-                runtime.context.constitution_pack,
-                axis="aggregation",
-                scenarios=frozenset(_require_constitution_route(state).scenarios),
-            )
-            if level is not None:
-                level = _apply_enablement_lower_bound(
-                    level,
-                    original_enablement_label=enablement_scores.derived_label,
-                    minimum_level=aggregate_policy.deterministic_minimum_level,
-                )
-            still_conflicted = bool(remaining_conflicts)
-            resolved_aggregate = _updated_aggregate(
-                aggregate,
-                decision_status=(
-                    DecisionStatus.REVIEW_REQUIRED if still_conflicted else DecisionStatus.RESOLVED
-                ),
-                response_compliance_level=None if still_conflicted else level,
-                provisional_level=level if still_conflicted else None,
-                overall_score=None if still_conflicted else score,
-                resolution_source="review" if still_conflicted else "arbitration",
-            )
         return _record_output(
             span,
-            {"arbitration": arbitration, "aggregate": resolved_aggregate},
+            {
+                "category_results": category_results,
+                "aggregate": _aggregate_category_results(state, category_results),
+            },
         )
 
 
@@ -1325,9 +1134,6 @@ async def _arbitrate_category_results(
 ) -> tuple[CategoryEvaluationResult, ...]:
     """Run at most one constrained arbitration for each conflicted leaf."""
 
-    registry = context.constitution_registry
-    if registry is None:
-        raise ConfigurationError("category arbitration requires Constitution registry")
     scenarios = frozenset(_require_category_route(state).scenarios)
     updated: list[CategoryEvaluationResult] = []
     for category in state.category_results:
@@ -1335,7 +1141,7 @@ async def _arbitrate_category_results(
             updated.append(category)
             continue
         compiled_arbitration = compile_constitution(
-            registry.get(category.constitution_id),
+            context.constitution_registry.get(category.constitution_id),
             axis="arbitration",
             scenarios=scenarios,
             category_id=category.category_id,
@@ -1434,11 +1240,8 @@ def _apply_category_arbitration(
         compliance_label=compliance_label,
         facets=enablement_scores,
     )
-    registry = context.constitution_registry
-    if registry is None:
-        raise ConfigurationError("category arbitration requires Constitution registry")
     aggregate_policy = compile_constitution(
-        registry.get(category.constitution_id),
+        context.constitution_registry.get(category.constitution_id),
         axis="aggregation",
         scenarios=frozenset(_require_category_route(state).scenarios),
         category_id=category.category_id,
@@ -1503,34 +1306,19 @@ async def _finalize(
             grounding_artifact=_require_grounding(state),
             intent_analysis=_require_intent(state),
             category_analysis=state.category_analysis,
-            category_route_hash=(
-                state.category_route.route_hash if state.category_route is not None else None
-            ),
-            routed_category_ids=(
-                state.category_route.selected_category_ids
-                if state.category_route is not None
-                else ()
-            ),
+            category_route_hash=_require_category_route(state).route_hash,
+            routed_category_ids=_require_category_route(state).selected_category_ids,
             category_results=state.category_results,
             constitution_route_hash=_require_constitution_route(state).route_hash,
             constitution_route_action=_effective_route_action(state).value,
             constitution_scenarios=_require_constitution_route(state).scenarios,
-            verdicts=(
-                _ordered_partial_verdicts(
-                    tuple(verdict for verdict in state.verdicts if verdict.category_id is None)
-                )
-                if state.category_route is not None
-                else _ordered_partial_verdicts(state.verdicts)
-                if _effective_route_action(state) is ConstitutionRouteAction.EVALUATE
-                else ()
+            verdicts=_ordered_partial_verdicts(
+                tuple(verdict for verdict in state.verdicts if verdict.category_id is None)
             ),
-            judge_failures=(
-                tuple(failure for failure in state.judge_failures if failure.category_id is None)
-                if state.category_route is not None
-                else state.judge_failures
+            judge_failures=tuple(
+                failure for failure in state.judge_failures if failure.category_id is None
             ),
             aggregate=_require_aggregate(state),
-            arbitration=state.arbitration,
         )
         return _record_output(span, {"result": result})
 
@@ -1740,9 +1528,7 @@ def _require_category_route(state: EvaluationState) -> MultiCategoryRoute:
 
 
 def _effective_route_action(state: EvaluationState) -> ConstitutionRouteAction:
-    if state.category_route is not None:
-        return state.category_route.action
-    return _require_constitution_route(state).action
+    return _require_category_route(state).action
 
 
 def _require_aggregate(state: EvaluationState) -> AggregateDecision:

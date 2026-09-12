@@ -190,21 +190,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path("config/models.toml"),
     )
     evaluate_run_parser.add_argument("--allow-unqualified-model", action="store_true")
-    taxonomy_group = evaluate_run_parser.add_mutually_exclusive_group()
-    taxonomy_group.add_argument(
+    evaluate_run_parser.add_argument(
         "--taxonomy",
         default=_DEFAULT_TAXONOMY_ID,
         help=(
             "taxonomy ID for the multi-label Category Router "
             f"(default: {_DEFAULT_TAXONOMY_ID})"
         ),
-    )
-    taxonomy_group.add_argument(
-        "--no-taxonomy",
-        dest="taxonomy",
-        action="store_const",
-        const=None,
-        help="disable the taxonomy Category Router for this run",
     )
     evaluate_run_parser.add_argument("--taxonomy-version")
     evaluate_run_parser.add_argument(
@@ -444,20 +436,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "grounding_pipeline": _grounding_pipeline(args),
                 "cache_only": args.cache_only,
             }
-            if args.taxonomy:
-                constitution_registry = ConstitutionRegistry.load(
-                    args.constitution_registry
-                )
-                taxonomy_registry = TaxonomyRegistry.load(args.taxonomy_registry)
-                taxonomy_pack = taxonomy_registry.get(
-                    args.taxonomy,
-                    version=args.taxonomy_version,
-                )
-                taxonomy_registry.validate_constitutions(constitution_registry)
-                common.update(
-                    taxonomy_pack=taxonomy_pack,
-                    constitution_registry=constitution_registry,
-                )
+            constitution_registry = ConstitutionRegistry.load(args.constitution_registry)
+            taxonomy_registry = TaxonomyRegistry.load(args.taxonomy_registry)
+            taxonomy_pack = taxonomy_registry.get(
+                args.taxonomy,
+                version=args.taxonomy_version,
+            )
+            taxonomy_registry.validate_constitutions(constitution_registry)
+            common.update(
+                taxonomy_pack=taxonomy_pack,
+                constitution_registry=constitution_registry,
+            )
             definition = JuryPlan.load(args.jury_plan).resolve(
                 ModelRegistry.load(args.model_registry),
                 allow_unqualified=args.allow_unqualified_model,

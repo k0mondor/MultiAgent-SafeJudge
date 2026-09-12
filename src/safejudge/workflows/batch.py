@@ -156,8 +156,8 @@ async def run_evaluation_batch(
     max_retries: int = 1,
     parameters: Mapping[str, JsonValue] | None = None,
     constitution_pack: ConstitutionPack | None = None,
-    taxonomy_pack: TaxonomyPack | None = None,
-    constitution_registry: ConstitutionRegistry | None = None,
+    taxonomy_pack: TaxonomyPack,
+    constitution_registry: ConstitutionRegistry,
     grounding_pipeline: GroundingPipeline | None = None,
     limit: int | None = None,
     overwrite: bool = False,
@@ -203,13 +203,9 @@ async def run_evaluation_batch(
     resolved_constitution = constitution_pack or ConstitutionRegistry.load(
         Path("config/constitutions")
     ).get("illegal-enablement-v1")
-    resolved_registry = constitution_registry
-    if taxonomy_pack is not None and resolved_registry is None:
-        resolved_registry = ConstitutionRegistry.load(Path("config/constitutions"))
-    if taxonomy_pack is not None and resolved_registry is not None:
-        for category in taxonomy_pack.routed_categories:
-            for constitution_id in category.constitution_ids:
-                resolved_registry.get(constitution_id)
+    for category in taxonomy_pack.routed_categories:
+        for constitution_id in category.constitution_ids:
+            constitution_registry.get(constitution_id)
     resolved_grounding = grounding_pipeline or GroundingPipeline(
         mode=GroundingMode.BENCHMARK_ASSISTED
     )
@@ -218,7 +214,7 @@ async def run_evaluation_batch(
         jury=jury,
         constitution_pack=resolved_constitution,
         taxonomy_pack=taxonomy_pack,
-        constitution_registry=resolved_registry,
+        constitution_registry=constitution_registry,
         grounding_pipeline=resolved_grounding,
         judge_parameters=dict(parameters or {}),
         node_ledger=SQLiteNodeLedger(node_ledger_path),
@@ -304,10 +300,10 @@ async def run_evaluation_batch(
         constitution_id=resolved_constitution.constitution_id,
         constitution_version=resolved_constitution.version,
         constitution_hash=resolved_constitution.constitution_hash,
-        taxonomy_id=(taxonomy_pack.taxonomy_id if taxonomy_pack is not None else None),
-        taxonomy_version=(taxonomy_pack.taxonomy_version if taxonomy_pack is not None else None),
-        taxonomy_hash=(taxonomy_pack.taxonomy_hash if taxonomy_pack is not None else None),
-        standard_id=(taxonomy_pack.standard_id if taxonomy_pack is not None else None),
+        taxonomy_id=taxonomy_pack.taxonomy_id,
+        taxonomy_version=taxonomy_pack.taxonomy_version,
+        taxonomy_hash=taxonomy_pack.taxonomy_hash,
+        standard_id=taxonomy_pack.standard_id,
         aggregator_id=graph_context.aggregation_policy.aggregator_id,
         aggregator_version=graph_context.aggregation_policy.aggregator_version,
         aggregator_hash=graph_context.aggregation_policy.fingerprint,

@@ -46,18 +46,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--limit", type=int, default=1)
     parser.add_argument("--run-id")
-    taxonomy_group = parser.add_mutually_exclusive_group()
-    taxonomy_group.add_argument(
+    parser.add_argument(
         "--taxonomy",
         default=DEFAULT_TAXONOMY_ID,
         help=f"taxonomy ID (default: {DEFAULT_TAXONOMY_ID})",
-    )
-    taxonomy_group.add_argument(
-        "--no-taxonomy",
-        dest="taxonomy",
-        action="store_const",
-        const=None,
-        help="disable taxonomy routing for this run",
     )
     parser.add_argument(
         "--taxonomy-version",
@@ -117,11 +109,9 @@ def main() -> int:
         for capability in (args.capability or ["text+image"])
         for item in ("--capability", capability)
     ]
-    taxonomy_flags = ["--no-taxonomy"]
-    if args.taxonomy is not None:
-        taxonomy_flags = ["--taxonomy", args.taxonomy]
-        if args.taxonomy_version is not None:
-            taxonomy_flags.extend(["--taxonomy-version", args.taxonomy_version])
+    taxonomy_flags = ["--taxonomy", args.taxonomy]
+    if args.taxonomy_version is not None:
+        taxonomy_flags.extend(["--taxonomy-version", args.taxonomy_version])
 
     if args.replay:
         if not args.overwrite:

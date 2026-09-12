@@ -76,8 +76,8 @@ safejudge evaluate run-jsonl `
   --taxonomy-version 1.1
 ```
 
-Use `--no-taxonomy` only when deliberately reproducing the legacy route-free
-evaluation path.
+The legacy route-free evaluation path has been retired. New evaluations always resolve a
+versioned taxonomy pack and its Constitution bindings.
 
 The upstream Request Analyzer sees only the original request, Grounding facts, and the
 complete GB/T taxonomy; it never sees the frozen target response during category discovery.

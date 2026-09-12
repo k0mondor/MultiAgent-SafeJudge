@@ -41,10 +41,9 @@ class CliTaxonomyDefaultTests(unittest.TestCase):
         self.assertEqual(args.taxonomy, "gb-t-45654-2025-safejudge-v1")
         self.assertIsNone(args.taxonomy_version)
 
-    def test_taxonomy_can_be_explicitly_disabled(self) -> None:
-        args = self._evaluate_args("--no-taxonomy")
-
-        self.assertIsNone(args.taxonomy)
+    def test_legacy_no_taxonomy_flag_is_rejected(self) -> None:
+        with self.assertRaises(SystemExit):
+            self._evaluate_args("--no-taxonomy")
 
     def test_evaluation_cache_only_mode_is_explicit(self) -> None:
         self.assertFalse(self._evaluate_args().cache_only)
