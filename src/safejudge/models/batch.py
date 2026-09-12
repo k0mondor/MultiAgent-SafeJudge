@@ -3,9 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import os
-import tempfile
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
@@ -19,14 +16,15 @@ from safejudge.contracts.base import ContractModel
 from safejudge.contracts.dataset import (
     CanonicalMultimodalSample,
     MediaPart,
-    Sha256,
 )
 from safejudge.contracts.evaluation import TargetResponse
+from safejudge.contracts.files import FileDigest
 from safejudge.contracts.model import (
     InvocationContext,
     ModelRole,
 )
 from safejudge.core.errors import ConfigurationError, ContractValidationError
+from safejudge.core.files import atomic_write_text, sha256_bytes, sha256_file
 from safejudge.core.time import utc_now
 from safejudge.models.base import ModelProvider
 from safejudge.models.cache import SQLiteModelStore
@@ -35,16 +33,11 @@ from safejudge.models.profiles import ModelProfile
 from safejudge.models.target import TargetRunner
 
 
-class BatchFileDigest(ContractModel):
-    name: str
-    sha256: Sha256
-
-
 class TargetBatchManifest(ContractModel):
     manifest_version: Literal["1.1"] = "1.1"
     target_response_schema_version: Literal["1.1"] = "1.1"
-    input: BatchFileDigest
-    output: BatchFileDigest
+    input: FileDigest
+    output: FileDigest
     provider: str
     model: str
     experiment_id: str
@@ -52,7 +45,7 @@ class TargetBatchManifest(ContractModel):
     input_sample_count: int = Field(default=0, ge=0)
     sample_count: int = Field(ge=0)
     failure_count: int = Field(default=0, ge=0)
-    failures: BatchFileDigest | None = None
+    failures: FileDigest | None = None
     verified_media_count: int = Field(ge=0)
     modality_counts: dict[str, int]
     cache_hit_count: int = Field(ge=0)
@@ -258,7 +251,7 @@ def _verify_sample_media(
             raise ContractValidationError(
                 f"sample {sample.sample_id!r} media size mismatch: {media.uri}"
             )
-        if media.sha256 is None or media.sha256.lower() != _file_sha256(physical):
+        if media.sha256 is None or media.sha256.lower() != sha256_file(physical):
             raise ContractValidationError(
                 f"sample {sample.sample_id!r} media SHA-256 mismatch: {media.uri}"
             )
@@ -282,110 +275,46 @@ def _persist_batch(
     verified_media_count: int,
     modality_counts: Counter[str],
 ) -> TargetBatchResult:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_output: Path | None = None
-    temporary_manifest: Path | None = None
-    temporary_failures: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            newline="\n",
-            prefix=f".{output_path.name}.",
-            suffix=".tmp",
-            dir=output_path.parent,
-            delete=False,
-        ) as stream:
-            temporary_output = Path(stream.name)
-            for response in responses:
-                stream.write(response.model_dump_json())
-                stream.write("\n")
-
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            newline="\n",
-            prefix=f".{failure_path.name}.",
-            suffix=".tmp",
-            dir=output_path.parent,
-            delete=False,
-        ) as stream:
-            temporary_failures = Path(stream.name)
-            for failure in failures:
-                stream.write(failure.model_dump_json())
-                stream.write("\n")
-
-        run_stats = SQLiteModelStore(store_path).run_stats(
-            context=context,
-            role=ModelRole.TARGET,
-        )
-
-        manifest = TargetBatchManifest(
-            input=BatchFileDigest(name=input_path.name, sha256=_file_sha256(input_path)),
-            output=BatchFileDigest(
-                name=output_path.name,
-                sha256=_file_sha256(temporary_output),
-            ),
-            provider=provider.provider_name,
-            model=provider.model_id,
-            experiment_id=context.experiment_id,
-            run_id=context.run_id,
-            input_sample_count=input_sample_count,
-            sample_count=len(responses),
-            failure_count=len(failures),
-            failures=BatchFileDigest(
-                name=failure_path.name,
-                sha256=_file_sha256(temporary_failures),
-            ),
-            verified_media_count=verified_media_count,
-            modality_counts=dict(sorted(modality_counts.items())),
-            cache_hit_count=run_stats.cache_hit_count,
-            cache_miss_count=run_stats.cache_miss_count,
-            logical_call_count=run_stats.logical_call_count,
-            provider_attempt_count=run_stats.provider_attempt_count,
-            successful_call_count=run_stats.successful_call_count,
-            failed_call_count=run_stats.failed_call_count,
-            billed_cost_usd=run_stats.billed_cost_usd,
-        )
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            newline="\n",
-            prefix=f".{manifest_path.name}.",
-            suffix=".tmp",
-            dir=manifest_path.parent,
-            delete=False,
-        ) as stream:
-            temporary_manifest = Path(stream.name)
-            stream.write(manifest.model_dump_json(indent=2))
-            stream.write("\n")
-
-        os.replace(temporary_output, output_path)
-        temporary_output = None
-        os.replace(temporary_failures, failure_path)
-        temporary_failures = None
-        os.replace(temporary_manifest, manifest_path)
-        temporary_manifest = None
-        return TargetBatchResult(
-            output_path=output_path,
-            manifest_path=manifest_path,
-            store_path=store_path,
-            manifest=manifest,
-            failure_path=failure_path,
-        )
-    finally:
-        for temporary_path in (
-            temporary_output,
-            temporary_failures,
-            temporary_manifest,
-        ):
-            if temporary_path is not None:
-                temporary_path.unlink(missing_ok=True)
-
-
-def _file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    output_content = "".join(f"{response.model_dump_json()}\n" for response in responses)
+    failure_content = "".join(f"{failure.model_dump_json()}\n" for failure in failures)
+    run_stats = SQLiteModelStore(store_path).run_stats(
+        context=context,
+        role=ModelRole.TARGET,
+    )
+    manifest = TargetBatchManifest(
+        input=FileDigest(name=input_path.name, sha256=sha256_file(input_path)),
+        output=FileDigest(
+            name=output_path.name,
+            sha256=sha256_bytes(output_content.encode("utf-8")),
+        ),
+        provider=provider.provider_name,
+        model=provider.model_id,
+        experiment_id=context.experiment_id,
+        run_id=context.run_id,
+        input_sample_count=input_sample_count,
+        sample_count=len(responses),
+        failure_count=len(failures),
+        failures=FileDigest(
+            name=failure_path.name,
+            sha256=sha256_bytes(failure_content.encode("utf-8")),
+        ),
+        verified_media_count=verified_media_count,
+        modality_counts=dict(sorted(modality_counts.items())),
+        cache_hit_count=run_stats.cache_hit_count,
+        cache_miss_count=run_stats.cache_miss_count,
+        logical_call_count=run_stats.logical_call_count,
+        provider_attempt_count=run_stats.provider_attempt_count,
+        successful_call_count=run_stats.successful_call_count,
+        failed_call_count=run_stats.failed_call_count,
+        billed_cost_usd=run_stats.billed_cost_usd,
+    )
+    atomic_write_text(output_path, output_content)
+    atomic_write_text(failure_path, failure_content)
+    atomic_write_text(manifest_path, f"{manifest.model_dump_json(indent=2)}\n")
+    return TargetBatchResult(
+        output_path=output_path,
+        manifest_path=manifest_path,
+        store_path=store_path,
+        manifest=manifest,
+        failure_path=failure_path,
+    )

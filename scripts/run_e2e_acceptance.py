@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from datetime import UTC, datetime
 from pathlib import Path
 
 from safejudge.cli import main as safejudge_main
 from safejudge.contracts.judging import DecisionStatus, EvaluationResult
+from safejudge.core.files import sha256_file
 from safejudge.models.batch import TargetBatchManifest
 from safejudge.reporting import write_evaluation_markdown_report
 from safejudge.workflows.batch import EvaluationBatchManifest
@@ -318,9 +318,9 @@ def _validate_frozen_target(
     manifest = TargetBatchManifest.model_validate_json(
         target_manifest_path.read_text(encoding="utf-8")
     )
-    if manifest.input.sha256 != _file_sha256(input_path):
+    if manifest.input.sha256 != sha256_file(input_path):
         raise SystemExit("frozen TargetResponse input hash does not match --input")
-    if manifest.output.sha256 != _file_sha256(target_output):
+    if manifest.output.sha256 != sha256_file(target_output):
         raise SystemExit("frozen TargetResponse artifact hash does not match its manifest")
     if manifest.input_sample_count != expected_samples:
         raise SystemExit(
@@ -339,14 +339,6 @@ def _acceptance_status(*, review_required_count: int, acceptance_mode: str) -> s
     if not review_required_count:
         return "passed"
     return "completed_with_review" if acceptance_mode == "batch" else "review_required"
-
-
-def _file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 if __name__ == "__main__":

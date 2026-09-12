@@ -3,9 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import os
-import tempfile
 from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -22,6 +19,7 @@ from safejudge.constitution.registry import ConstitutionRegistry
 from safejudge.contracts.base import ContractModel
 from safejudge.contracts.dataset import CanonicalMultimodalSample, Sha256
 from safejudge.contracts.evaluation import TargetResponse
+from safejudge.contracts.files import FileDigest
 from safejudge.contracts.judging import AggregateDecision, EvaluationResult
 from safejudge.contracts.jury import (
     JuryDefinition,
@@ -32,6 +30,7 @@ from safejudge.contracts.model import (
     ModelRole,
 )
 from safejudge.core.errors import ConfigurationError, ContractValidationError
+from safejudge.core.files import atomic_write_bytes, file_digest, sha256_bytes
 from safejudge.core.time import utc_now
 from safejudge.datasets.readers import iter_mapping_records
 from safejudge.grounding.contracts import GroundingMode
@@ -51,18 +50,13 @@ from safejudge.workflows.jury import build_jury_runtime
 from safejudge.workflows.ledger import SQLiteNodeLedger
 
 
-class EvaluationFileDigest(ContractModel):
-    name: str
-    sha256: Sha256
-
-
 class EvaluationBatchManifest(ContractModel):
     manifest_version: Literal["4.0", "5.0"] = "5.0"
     evaluation_result_schema_version: Literal["4.0"] = "4.0"
-    samples_input: EvaluationFileDigest
-    targets_input: EvaluationFileDigest
-    output: EvaluationFileDigest
-    failures_output: EvaluationFileDigest
+    samples_input: FileDigest
+    targets_input: FileDigest
+    output: FileDigest
+    failures_output: FileDigest
     jury: JuryIdentity
     jury_hash: Sha256
     constitution_id: str
@@ -288,22 +282,22 @@ async def run_evaluation_batch(
             results.append(outcome)
 
     output_content = "".join(f"{item.model_dump_json()}\n" for item in results).encode()
-    _atomic_write(output_path, output_content)
+    atomic_write_bytes(output_path, output_content)
     failure_content = "".join(f"{item.model_dump_json()}\n" for item in failures).encode()
-    _atomic_write(failure_path, failure_content)
+    atomic_write_bytes(failure_path, failure_content)
     level_counts = Counter(_manifest_level(item.aggregate) for item in results)
     category_stats = _category_manifest_statistics(results)
     run_stats = store.run_stats(context=context, role=ModelRole.JUDGE)
     manifest = EvaluationBatchManifest(
-        samples_input=_digest(samples_path),
-        targets_input=_digest(target_responses_path),
-        output=EvaluationFileDigest(
+        samples_input=file_digest(samples_path),
+        targets_input=file_digest(target_responses_path),
+        output=FileDigest(
             name=output_path.name,
-            sha256=hashlib.sha256(output_content).hexdigest(),
+            sha256=sha256_bytes(output_content),
         ),
-        failures_output=EvaluationFileDigest(
+        failures_output=FileDigest(
             name=failure_path.name,
-            sha256=hashlib.sha256(failure_content).hexdigest(),
+            sha256=sha256_bytes(failure_content),
         ),
         jury=jury.identity,
         jury_hash=jury.identity.fingerprint,
@@ -358,7 +352,7 @@ async def run_evaluation_batch(
         facet_value_counts=category_stats.facet_value_counts,
         facet_combination_counts=category_stats.facet_combination_counts,
     )
-    _atomic_write(
+    atomic_write_bytes(
         manifest_path,
         f"{manifest.model_dump_json(indent=2)}\n".encode(),
     )
@@ -447,13 +441,6 @@ def _validate_paths(
         )
 
 
-def _digest(path: Path) -> EvaluationFileDigest:
-    return EvaluationFileDigest(
-        name=path.name,
-        sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
-    )
-
-
 def _manifest_level(aggregate: AggregateDecision) -> str:
     level = aggregate.response_compliance_level
     return aggregate.decision_status.value if level is None else str(level.value)
@@ -540,18 +527,3 @@ def _judge_failure_count(result: EvaluationResult) -> int:
     return len(result.judge_failures) + sum(
         len(category_result.judge_failures) for category_result in result.category_results
     )
-
-
-def _atomic_write(path: Path, content: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "wb") as stream:
-            stream.write(content)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-    except BaseException:
-        temporary.unlink(missing_ok=True)
-        raise

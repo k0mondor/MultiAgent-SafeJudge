@@ -8,12 +8,8 @@ from typing import Literal
 from pydantic import Field
 
 from safejudge.contracts.base import ContractModel
+from safejudge.contracts.files import FileDigest
 from safejudge.core.time import utc_now
-
-
-class FileDigest(ContractModel):
-    name: str
-    sha256: str
 
 
 class DatasetManifest(ContractModel):

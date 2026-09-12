@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import hashlib
 import mimetypes
 from pathlib import Path, PurePosixPath
 
 from safejudge.contracts.dataset import MediaRef, MediaType
 from safejudge.core.errors import AdapterError
+from safejudge.core.files import sha256_file
 
 _DEFAULT_MIME_TYPES = {
     MediaType.IMAGE: "image/jpeg",
@@ -17,11 +17,7 @@ _DEFAULT_MIME_TYPES = {
 
 
 def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    return sha256_file(path)
 
 
 def build_media_ref(

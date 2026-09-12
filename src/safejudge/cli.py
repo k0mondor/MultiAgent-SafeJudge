@@ -677,18 +677,10 @@ def _jury_provider(
     artifact_root: Path,
     judge_env_file: Path,
 ) -> ModelProvider:
-    profile = definition.profile
-    artifacts = FileArtifactStore(artifact_root / "judge")
-    if profile.provider == "local-openai":
-        return LocalOpenAIProvider(
-            settings=_local_judge_settings(profile, judge_env_file),
-            capabilities=_judge_capabilities(),
-            artifact_store=artifacts,
-        )
-    return OpenRouterProvider(
-        settings=_openrouter_profile_settings(profile),
-        capabilities=_judge_capabilities(),
-        artifact_store=artifacts,
+    return _text_judge_provider(
+        definition.profile,
+        artifact_root=artifact_root / "judge",
+        judge_env_file=judge_env_file,
     )
 
 
@@ -701,7 +693,20 @@ def _category_guardrail_provider(
     profile = definition.category_guardrail_profile
     if profile is None:
         return None
-    artifacts = FileArtifactStore(artifact_root / "guardrail")
+    return _text_judge_provider(
+        profile,
+        artifact_root=artifact_root / "guardrail",
+        judge_env_file=judge_env_file,
+    )
+
+
+def _text_judge_provider(
+    profile: ModelProfile,
+    *,
+    artifact_root: Path,
+    judge_env_file: Path,
+) -> ModelProvider:
+    artifacts = FileArtifactStore(artifact_root)
     if profile.provider == "local-openai":
         return LocalOpenAIProvider(
             settings=_local_judge_settings(profile, judge_env_file),
