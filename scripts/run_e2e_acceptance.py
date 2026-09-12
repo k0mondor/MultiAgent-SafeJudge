@@ -14,7 +14,6 @@ from safejudge.reporting import write_evaluation_markdown_report
 from safejudge.workflows.batch import EvaluationBatchManifest
 
 DEFAULT_TAXONOMY_ID = "gb-t-45654-2025-safejudge-v1"
-DEFAULT_TAXONOMY_VERSION = "1.0"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -59,7 +58,10 @@ def build_parser() -> argparse.ArgumentParser:
         const=None,
         help="disable taxonomy routing for this run",
     )
-    parser.add_argument("--taxonomy-version", default=DEFAULT_TAXONOMY_VERSION)
+    parser.add_argument(
+        "--taxonomy-version",
+        help="taxonomy version (default: latest registered version)",
+    )
     parser.add_argument("--allow-unqualified-model", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
     return parser
@@ -96,16 +98,11 @@ def main() -> int:
         for capability in (args.capability or ["text+image"])
         for item in ("--capability", capability)
     ]
-    taxonomy_flags = (
-        [
-            "--taxonomy",
-            args.taxonomy,
-            "--taxonomy-version",
-            args.taxonomy_version,
-        ]
-        if args.taxonomy is not None
-        else ["--no-taxonomy"]
-    )
+    taxonomy_flags = ["--no-taxonomy"]
+    if args.taxonomy is not None:
+        taxonomy_flags = ["--taxonomy", args.taxonomy]
+        if args.taxonomy_version is not None:
+            taxonomy_flags.extend(["--taxonomy-version", args.taxonomy_version])
 
     safejudge_main(
         [
@@ -138,6 +135,14 @@ def main() -> int:
             *overwrite_flags,
         ]
     )
+
+    target_manifest = TargetBatchManifest.model_validate_json(
+        target_output.with_suffix(".jsonl.manifest.json").read_text(encoding="utf-8")
+    )
+    if target_manifest.failure_count or (
+        target_manifest.sample_count != target_manifest.input_sample_count
+    ):
+        raise SystemExit("formal acceptance failed during Target generation")
 
     safejudge_main(
         [
@@ -183,9 +188,6 @@ def main() -> int:
         ]
     )
 
-    target_manifest = TargetBatchManifest.model_validate_json(
-        target_output.with_suffix(".jsonl.manifest.json").read_text(encoding="utf-8")
-    )
     evaluation_manifest = EvaluationBatchManifest.model_validate_json(
         evaluation_output.with_suffix(".jsonl.manifest.json").read_text(encoding="utf-8")
     )
@@ -201,10 +203,6 @@ def main() -> int:
         results=results,
     )
     print(f"Human-readable report: {readable_report_path}")
-    if target_manifest.failure_count or (
-        target_manifest.sample_count != target_manifest.input_sample_count
-    ):
-        raise SystemExit("formal acceptance failed during Target generation")
     if evaluation_manifest.failure_count or evaluation_manifest.judge_failure_count:
         raise SystemExit("formal acceptance contains batch or Judge failures")
     if evaluation_manifest.jury.category_guardrail is not None and (
