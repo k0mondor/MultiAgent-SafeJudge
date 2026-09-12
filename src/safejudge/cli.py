@@ -144,6 +144,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="run only the first N validated samples for a low-cost pilot",
     )
     target_run_parser.add_argument("--overwrite", action="store_true")
+    target_run_parser.add_argument(
+        "--cache-only",
+        action="store_true",
+        help="fail on any cache miss without contacting the model provider",
+    )
 
     evaluate_parser = subparsers.add_parser(
         "evaluate",
@@ -250,6 +255,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     evaluate_run_parser.add_argument("--limit", type=int)
     evaluate_run_parser.add_argument("--overwrite", action="store_true")
+    evaluate_run_parser.add_argument(
+        "--cache-only",
+        action="store_true",
+        help="fail on any grounding, Judge, or guardrail cache miss",
+    )
 
     models_parser = subparsers.add_parser("models", help="inspect model profiles")
     models_commands = models_parser.add_subparsers(dest="models_command", required=True)
@@ -352,6 +362,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         profile=target_profile,
                         limit=args.limit,
                         overwrite=args.overwrite,
+                        cache_only=args.cache_only,
                     )
                 )
             else:
@@ -378,6 +389,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         profile=target_profile,
                         limit=args.limit,
                         overwrite=args.overwrite,
+                        cache_only=args.cache_only,
                     )
                 )
         except (SafeJudgeError, ValidationError) as error:
@@ -430,6 +442,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "limit": args.limit,
                 "overwrite": args.overwrite,
                 "grounding_pipeline": _grounding_pipeline(args),
+                "cache_only": args.cache_only,
             }
             if args.taxonomy:
                 constitution_registry = ConstitutionRegistry.load(
@@ -585,6 +598,7 @@ def _grounding_pipeline(args: argparse.Namespace) -> GroundingPipeline:
                 max_concurrency=args.grounding_max_concurrency,
                 max_retries=args.max_retries,
                 retry_backoff_seconds=0.5,
+                cache_only=getattr(args, "cache_only", False),
             ),
         )
         tools = (

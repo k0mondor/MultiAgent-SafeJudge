@@ -10,7 +10,7 @@ from decimal import Decimal
 from uuid import uuid4
 
 from safejudge.contracts.model import InvocationContext, ModelRequest, ModelResponse
-from safejudge.core.errors import BudgetExceededError, ProviderError
+from safejudge.core.errors import BudgetExceededError, CacheMissError, ProviderError
 from safejudge.models.base import ModelProvider
 from safejudge.models.cache import SQLiteModelStore, stable_request_hash
 
@@ -35,6 +35,7 @@ class InvocationPolicy:
     max_concurrency: int = 4
     max_total_cost_usd: Decimal | None = None
     uncached_call_reservation_usd: Decimal = Decimal("0")
+    cache_only: bool = False
 
     def __post_init__(self) -> None:
         if self.max_retries < 0:
@@ -99,6 +100,13 @@ class ModelInvoker:
                 cache_hit=True,
                 attempts=0,
                 billed_usd=Decimal("0"),
+            )
+        if self.policy.cache_only:
+            raise CacheMissError(
+                "cache-only replay blocked an uncached model call: "
+                f"provider={self.provider.provider_name!r}, "
+                f"model={self.provider.model_id!r}, "
+                f"request_id={request.request_id!r}, cache_key={cache_key}"
             )
 
         async with self._singleflight.hold(cache_key):

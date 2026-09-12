@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from datetime import UTC, datetime
 from pathlib import Path
@@ -64,6 +65,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--allow-unqualified-model", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument(
+        "--replay",
+        action="store_true",
+        help=(
+            "reuse the existing frozen TargetResponse artifact and forbid all new "
+            "grounding, Judge, and guardrail provider calls"
+        ),
+    )
     return parser
 
 
@@ -88,6 +97,7 @@ def main() -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
     run_id = args.run_id or datetime.now(UTC).strftime("e2e-%Y%m%dT%H%M%SZ")
     target_output = output_dir / "target-responses.jsonl"
+    target_manifest_path = target_output.with_suffix(".jsonl.manifest.json")
     evaluation_output = output_dir / "evaluations.jsonl"
     artifacts = output_dir / "artifacts"
 
@@ -104,40 +114,51 @@ def main() -> int:
         if args.taxonomy_version is not None:
             taxonomy_flags.extend(["--taxonomy-version", args.taxonomy_version])
 
-    safejudge_main(
-        [
-            "target",
-            "run-jsonl",
-            "--input",
-            str(input_path),
-            "--media-root",
-            str(media_root),
-            "--output",
-            str(target_output),
-            "--store",
-            str(output_dir / "target-calls.sqlite3"),
-            "--artifact-root",
-            str(artifacts),
-            "--model-registry",
-            str(registry),
-            "--model-profile",
-            args.target_profile,
-            "--experiment-id",
-            "formal-e2e-acceptance",
-            "--run-id",
-            f"{run_id}-target",
-            "--max-concurrency",
-            "1",
-            "--limit",
-            str(args.limit),
-            *capability_flags,
-            *common_flags,
-            *overwrite_flags,
-        ]
-    )
+    if args.replay:
+        if not args.overwrite:
+            raise SystemExit("--replay requires --overwrite for evaluation outputs")
+        _validate_frozen_target(
+            input_path=input_path,
+            target_output=target_output,
+            target_manifest_path=target_manifest_path,
+            expected_samples=args.limit,
+        )
+        print(f"Replay: using frozen TargetResponse artifact {target_output}")
+    else:
+        safejudge_main(
+            [
+                "target",
+                "run-jsonl",
+                "--input",
+                str(input_path),
+                "--media-root",
+                str(media_root),
+                "--output",
+                str(target_output),
+                "--store",
+                str(output_dir / "target-calls.sqlite3"),
+                "--artifact-root",
+                str(artifacts),
+                "--model-registry",
+                str(registry),
+                "--model-profile",
+                args.target_profile,
+                "--experiment-id",
+                "formal-e2e-acceptance",
+                "--run-id",
+                f"{run_id}-target",
+                "--max-concurrency",
+                "1",
+                "--limit",
+                str(args.limit),
+                *capability_flags,
+                *common_flags,
+                *overwrite_flags,
+            ]
+        )
 
     target_manifest = TargetBatchManifest.model_validate_json(
-        target_output.with_suffix(".jsonl.manifest.json").read_text(encoding="utf-8")
+        target_manifest_path.read_text(encoding="utf-8")
     )
     if target_manifest.failure_count or (
         target_manifest.sample_count != target_manifest.input_sample_count
@@ -185,6 +206,7 @@ def main() -> int:
             *taxonomy_flags,
             *common_flags,
             *overwrite_flags,
+            *(["--cache-only"] if args.replay else []),
         ]
     )
 
@@ -221,6 +243,7 @@ def main() -> int:
     report = {
         "schema_version": "1.0",
         "status": "passed",
+        "execution_mode": "replay" if args.replay else "fresh",
         "real_models": True,
         "grounding_mode": "blind",
         "taxonomy_id": evaluation_manifest.taxonomy_id,
@@ -238,11 +261,11 @@ def main() -> int:
         "guardrail_verdicts": evaluation_manifest.guardrail_verdict_count,
         "guardrail_triggers": evaluation_manifest.guardrail_trigger_counts,
         "provider_attempts": {
-            "target": target_manifest.provider_attempt_count,
+            "target": 0 if args.replay else target_manifest.provider_attempt_count,
             "jury": evaluation_manifest.provider_attempt_count,
         },
         "billed_cost_usd": {
-            "target": str(target_manifest.billed_cost_usd),
+            "target": "0" if args.replay else str(target_manifest.billed_cost_usd),
             "jury": str(evaluation_manifest.billed_cost_usd),
         },
         "target_manifest": str(target_output.with_suffix(".jsonl.manifest.json")),
@@ -258,6 +281,41 @@ def main() -> int:
     )
     print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0
+
+
+def _validate_frozen_target(
+    *,
+    input_path: Path,
+    target_output: Path,
+    target_manifest_path: Path,
+    expected_samples: int,
+) -> None:
+    if not target_output.is_file() or not target_manifest_path.is_file():
+        raise SystemExit(
+            "replay requires existing target-responses.jsonl and its manifest"
+        )
+    manifest = TargetBatchManifest.model_validate_json(
+        target_manifest_path.read_text(encoding="utf-8")
+    )
+    if manifest.input.sha256 != _file_sha256(input_path):
+        raise SystemExit("frozen TargetResponse input hash does not match --input")
+    if manifest.output.sha256 != _file_sha256(target_output):
+        raise SystemExit("frozen TargetResponse artifact hash does not match its manifest")
+    if manifest.input_sample_count != expected_samples:
+        raise SystemExit(
+            "replay sample count differs from frozen TargetResponse manifest: "
+            f"expected {manifest.input_sample_count}, got --limit {expected_samples}"
+        )
+    if manifest.failure_count or manifest.sample_count != expected_samples:
+        raise SystemExit("frozen TargetResponse artifact is incomplete")
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 if __name__ == "__main__":

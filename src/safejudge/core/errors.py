@@ -89,3 +89,7 @@ class UnsupportedModalityError(SafeJudgeError):
 
 class BudgetExceededError(SafeJudgeError):
     """A model call was blocked before spending beyond its configured budget."""
+
+
+class CacheMissError(SafeJudgeError):
+    """A cache-only replay could not resolve a model request from the cache."""

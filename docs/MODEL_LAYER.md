@@ -51,6 +51,10 @@ LOCAL_MODEL_API_KEY=
 不新增费用；预算在未缓存调用前检查。不同请求按信号量并行，相同缓存键通过 singleflight
 只调用一次。Batch 保留样本级错误记录，正式验收脚本会在任何失败上整体返回失败。
 
+模型调用层支持显式 `--cache-only`：缓存缺失在进入预算和 Provider 边界前抛出
+`CacheMissError`。正式验收脚本的 `--replay` 会冻结并校验已有 TargetResponse 文件，再以该模式
+执行 Grounding、Judge 和 Guardrail，因此重放不会产生新 Provider attempt 或费用。
+
 ## 验收入口
 
 不再维护模拟 Provider 和旧 Schema 的离线测试入口。唯一正式检验是

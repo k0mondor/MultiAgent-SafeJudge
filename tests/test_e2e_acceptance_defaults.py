@@ -24,6 +24,26 @@ class E2EAcceptanceDefaultsTests(unittest.TestCase):
 
         self.assertEqual(args.taxonomy, "gb-t-45654-2025-safejudge-v1")
         self.assertIsNone(args.taxonomy_version)
+        self.assertFalse(args.replay)
+
+    def test_replay_mode_is_explicit(self) -> None:
+        args = build_parser().parse_args(
+            [
+                "--input",
+                "input.jsonl",
+                "--media-root",
+                "media",
+                "--target-profile",
+                "target",
+                "--grounding-profile",
+                "grounding",
+                "--output-dir",
+                "output",
+                "--replay",
+            ]
+        )
+
+        self.assertTrue(args.replay)
 
 
 if __name__ == "__main__":

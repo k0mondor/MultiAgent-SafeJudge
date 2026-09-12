@@ -46,6 +46,10 @@ class CliTaxonomyDefaultTests(unittest.TestCase):
 
         self.assertIsNone(args.taxonomy)
 
+    def test_evaluation_cache_only_mode_is_explicit(self) -> None:
+        self.assertFalse(self._evaluate_args().cache_only)
+        self.assertTrue(self._evaluate_args("--cache-only").cache_only)
+
 
 if __name__ == "__main__":
     unittest.main()

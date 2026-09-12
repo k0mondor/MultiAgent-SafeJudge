@@ -60,6 +60,17 @@ python scripts/run_e2e_acceptance.py `
 dry-run 或静默降级。任一 Target、Grounding、Judge 失败，结果缺失或未 resolved 都以非零状态退出。
 命令会产生真实调用费用，运行前应核对 profile、样本量和账户预算。
 
+同一输出目录完成过一次运行后，可冻结已有的 `target-responses.jsonl` 并执行零新增调用重放：
+
+```powershell
+python scripts/run_e2e_acceptance.py <与原运行相同的参数> --overwrite --replay
+```
+
+`--replay` 会先校验输入、TargetResponse 及 manifest 的 SHA-256 和样本数；随后所有
+Grounding、Judge、Guardrail 请求只允许命中现有 SQLite 缓存。任何缓存缺失都会立即非零退出，
+不会访问 Provider。新生成的 TargetResponse ID 也由请求、模型和回答内容稳定计算，不再依赖每次
+运行都会变化的调用 ID。
+
 默认护栏计划通过 OpenRouter 调用 `meta-llama/llama-guard-4-12b`，不下载权重、不租用 GPU
 服务器；另提供 DeepSeek 远程 + Llama Guard 本地 OpenAI-compatible 服务的混合配置。
 Llama Guard 的原生 `safe/unsafe` 直接规范化为已路由国标小类的正式

@@ -167,6 +167,7 @@ async def run_evaluation_batch(
     grounding_pipeline: GroundingPipeline | None = None,
     limit: int | None = None,
     overwrite: bool = False,
+    cache_only: bool = False,
 ) -> EvaluationBatchResult:
     samples_path = samples_path.resolve()
     target_responses_path = target_responses_path.resolve()
@@ -202,6 +203,7 @@ async def run_evaluation_batch(
             max_concurrency=max_concurrency,
             max_retries=max_retries,
             retry_backoff_seconds=0.5,
+            cache_only=cache_only,
         ),
     )
     resolved_constitution = constitution_pack or ConstitutionRegistry.load(

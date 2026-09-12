@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Mapping
 
 from pydantic import JsonValue
@@ -84,7 +86,15 @@ class TargetRunner:
             raise AssertionError("unreachable target adaptive retry state")
         response = result.response
         return TargetResponse(
-            response_id=f"target_{result.call_id.removeprefix('call_')}",
+            response_id=_stable_target_response_id(
+                sample_id=sample.sample_id,
+                request_hash=response.request_hash,
+                provider=response.provider,
+                model=response.model,
+                model_version=response.model_version,
+                answer=response.answer,
+                finish_reason=response.finish_reason,
+            ),
             sample_id=sample.sample_id,
             call_id=result.call_id,
             provider_response_id=response.response_id,
@@ -125,3 +135,34 @@ class TargetRunner:
             parts=tuple(parts),
             parameters=dict(parameters),
         )
+
+
+def _stable_target_response_id(
+    *,
+    sample_id: str,
+    request_hash: str,
+    provider: str,
+    model: str,
+    model_version: str | None,
+    answer: str,
+    finish_reason: str | None,
+) -> str:
+    """Identify the immutable semantic response, not the local invocation event."""
+
+    payload = {
+        "schema": "safejudge-target-response-id-v1",
+        "sample_id": sample_id,
+        "request_hash": request_hash,
+        "provider": provider,
+        "model": model,
+        "model_version": model_version,
+        "answer": answer,
+        "finish_reason": finish_reason,
+    }
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return f"target_{hashlib.sha256(encoded).hexdigest()}"

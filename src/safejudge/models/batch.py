@@ -94,6 +94,7 @@ async def run_target_batch(
     max_local_media_bytes: int = 100 * 1024 * 1024,
     limit: int | None = None,
     overwrite: bool = False,
+    cache_only: bool = False,
 ) -> TargetBatchResult:
     """Validate canonical input and persist normalized responses from any provider."""
 
@@ -137,7 +138,10 @@ async def run_target_batch(
         ModelInvoker(
             provider=provider,
             store=store,
-            policy=InvocationPolicy(max_concurrency=max_concurrency),
+            policy=InvocationPolicy(
+                max_concurrency=max_concurrency,
+                cache_only=cache_only,
+            ),
         ),
         profile=profile,
     )
