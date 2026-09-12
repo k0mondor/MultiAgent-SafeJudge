@@ -66,6 +66,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--allow-unqualified-model", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument(
+        "--acceptance-mode",
+        choices=("strict", "batch"),
+        default="strict",
+        help=(
+            "strict fails when human review is required; batch completes and records "
+            "completed_with_review"
+        ),
+    )
+    parser.add_argument(
         "--replay",
         action="store_true",
         help=(
@@ -236,13 +245,22 @@ def main() -> int:
     if evaluation_manifest.sample_count != evaluation_manifest.input_sample_count:
         raise SystemExit("formal acceptance did not produce one result per input")
     if not results or any(
-        item.aggregate.decision_status is not DecisionStatus.RESOLVED for item in results
+        item.aggregate.decision_status is DecisionStatus.NOT_EVALUATED for item in results
     ):
-        raise SystemExit("formal acceptance contains unresolved results")
+        raise SystemExit("formal acceptance contains unevaluated results")
+
+    review_required_count = sum(
+        item.aggregate.decision_status is DecisionStatus.REVIEW_REQUIRED for item in results
+    )
+    status = _acceptance_status(
+        review_required_count=review_required_count,
+        acceptance_mode=args.acceptance_mode,
+    )
 
     report = {
         "schema_version": "1.0",
-        "status": "passed",
+        "status": status,
+        "acceptance_mode": args.acceptance_mode,
         "execution_mode": "replay" if args.replay else "fresh",
         "real_models": True,
         "grounding_mode": "blind",
@@ -252,6 +270,7 @@ def main() -> int:
         "run_id": run_id,
         "input": str(input_path),
         "samples": len(results),
+        "review_required_samples": review_required_count,
         "target_profile": args.target_profile,
         "grounding_profile": args.grounding_profile,
         "jury_id": evaluation_manifest.jury.jury_id,
@@ -280,6 +299,8 @@ def main() -> int:
         encoding="utf-8",
     )
     print(json.dumps(report, ensure_ascii=False, indent=2))
+    if review_required_count and args.acceptance_mode == "strict":
+        raise SystemExit("formal acceptance contains results requiring human review")
     return 0
 
 
@@ -308,6 +329,16 @@ def _validate_frozen_target(
         )
     if manifest.failure_count or manifest.sample_count != expected_samples:
         raise SystemExit("frozen TargetResponse artifact is incomplete")
+
+
+def _acceptance_status(*, review_required_count: int, acceptance_mode: str) -> str:
+    if review_required_count < 0:
+        raise ValueError("review_required_count cannot be negative")
+    if acceptance_mode not in {"strict", "batch"}:
+        raise ValueError(f"unknown acceptance mode: {acceptance_mode!r}")
+    if not review_required_count:
+        return "passed"
+    return "completed_with_review" if acceptance_mode == "batch" else "review_required"
 
 
 def _file_sha256(path: Path) -> str:

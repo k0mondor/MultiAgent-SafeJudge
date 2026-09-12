@@ -55,6 +55,10 @@ LOCAL_MODEL_API_KEY=
 `CacheMissError`。正式验收脚本的 `--replay` 会冻结并校验已有 TargetResponse 文件，再以该模式
 执行 Grounding、Judge 和 Guardrail，因此重放不会产生新 Provider attempt 或费用。
 
+Response Category Enricher 与 Arbitration 的结构化响应各允许一次结构恢复。恢复请求只携带原始
+模型输出、校验错误和目标 JSON Schema，不再携带原任务证据；它只能修正 JSON 语法、键名和容器
+形状。已能解析但语义校验失败的响应不会进入该恢复，避免模型在恢复阶段重新裁判或猜测缺失结论。
+
 ## 验收入口
 
 不再维护模拟 Provider 和旧 Schema 的离线测试入口。唯一正式检验是

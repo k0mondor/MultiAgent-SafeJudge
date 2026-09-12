@@ -71,6 +71,11 @@ Grounding、Judge、Guardrail 请求只允许命中现有 SQLite 缓存。任何
 不会访问 Provider。新生成的 TargetResponse ID 也由请求、模型和回答内容稳定计算，不再依赖每次
 运行都会变化的调用 ID。
 
+正式验收默认使用 `--acceptance-mode strict`，任何 `review_required` 都写出状态为
+`review_required` 的 acceptance JSON 后非零退出。批量实验可使用
+`--acceptance-mode batch`：工程失败仍非零退出，但只有人工复核项时正常完成，并将报告状态写为
+`completed_with_review`，同时记录 `review_required_samples`。
+
 默认护栏计划通过 OpenRouter 调用 `meta-llama/llama-guard-4-12b`，不下载权重、不租用 GPU
 服务器；另提供 DeepSeek 远程 + Llama Guard 本地 OpenAI-compatible 服务的混合配置。
 Llama Guard 的原生 `safe/unsafe` 直接规范化为已路由国标小类的正式

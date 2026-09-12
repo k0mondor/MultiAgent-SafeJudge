@@ -226,6 +226,10 @@ class _ArbitrationPayload(ContractModel):
         return self
 
 
+class _PayloadStructureError(ContractValidationError):
+    """JSON syntax or schema shape failed before trusted semantic validation."""
+
+
 class JudgeRunner:
     """Invokes a JUDGE model and accepts only strict, versioned JSON results."""
 
@@ -459,6 +463,7 @@ class JudgeRunner:
                 payload,
                 taxonomy=taxonomy,
             ),
+            structure_only_repair=True,
         )
         payload = self._validate_payload(_ResponseCategoryPayload, result.response.answer)
         response_added = _normalized_response_added_category_ids(
@@ -648,6 +653,7 @@ class JudgeRunner:
                 constitution=constitution,
                 conflict_codes=conflict_codes,
             ),
+            structure_only_repair=True,
         )
         payload = self._validate_payload(_ArbitrationPayload, result.response.answer)
         return ArbitrationDecision(
@@ -669,6 +675,7 @@ class JudgeRunner:
         parameters: Mapping[str, JsonValue] | None,
         payload_schema: type[ContractModel],
         semantic_validator: Callable[[ContractModel], None] | None = None,
+        structure_only_repair: bool = False,
     ) -> InvocationResult:
         if not self.invoker.provider.capabilities.supports(frozenset({InputModality.TEXT})):
             raise UnsupportedModalityError(
@@ -680,7 +687,8 @@ class JudgeRunner:
             payload_schema=payload_schema,
         )
         last_error: ContractValidationError | None = None
-        for attempt in range(self.profile.max_contract_retries + 1):
+        max_contract_retries = 1 if structure_only_repair else self.profile.max_contract_retries
+        for attempt in range(max_contract_retries + 1):
             attempt_overrides = dict(parameters or {})
             if attempt and self.profile.retry_parameters:
                 retry_index = min(attempt - 1, len(self.profile.retry_parameters) - 1)
@@ -699,9 +707,7 @@ class JudgeRunner:
             try:
                 result = await self.invoker.invoke(request, context=context)
             except ProviderError as error:
-                if error.kind not in _ADAPTIVE_RETRY_KINDS or attempt >= (
-                    self.profile.max_contract_retries
-                ):
+                if error.kind not in _ADAPTIVE_RETRY_KINDS or attempt >= max_contract_retries:
                     raise
                 continue
             try:
@@ -711,7 +717,12 @@ class JudgeRunner:
                 return result
             except ContractValidationError as error:
                 last_error = error
-                if attempt >= self.profile.max_contract_retries:
+                may_repair_structure = (
+                    structure_only_repair
+                    and isinstance(error, _PayloadStructureError)
+                    and attempt == 0
+                )
+                if structure_only_repair and not may_repair_structure:
                     raise JudgeContractError(
                         str(error),
                         request_id=request.request_id,
@@ -719,8 +730,25 @@ class JudgeRunner:
                         provider_response_id=result.response.response_id,
                         raw_artifact=result.response.raw_artifact,
                     ) from error
+                if attempt >= max_contract_retries:
+                    raise JudgeContractError(
+                        str(error),
+                        request_id=request.request_id,
+                        call_id=result.call_id,
+                        provider_response_id=result.response.response_id,
+                        raw_artifact=result.response.raw_artifact,
+                    ) from error
+                repair_prompt = (
+                    _json_structure_repair_prompt(
+                        result.response.answer,
+                        payload_schema=payload_schema,
+                        error=error,
+                    )
+                    if structure_only_repair
+                    else _repair_prompt(prompt, attempt=attempt + 1, error=error)
+                )
                 attempt_prompt = _prompt_for_output_mode(
-                    _repair_prompt(prompt, attempt=attempt + 1, error=error),
+                    repair_prompt,
                     profile=self.profile,
                     payload_schema=payload_schema,
                 )
@@ -730,9 +758,19 @@ class JudgeRunner:
     def _validate_payload[PayloadT: ContractModel](schema: type[PayloadT], raw: str) -> PayloadT:
         try:
             payload = _decode_json_object(raw)
+        except (json.JSONDecodeError, ValueError) as error:
+            raise _PayloadStructureError(
+                f"judge response is not valid {schema.__name__} JSON: {error}"
+            ) from error
+        try:
             return schema.model_validate(payload)
-        except (json.JSONDecodeError, ValidationError, ValueError) as error:
-            raise ContractValidationError(
+        except ValidationError as error:
+            validation_error = (
+                _PayloadStructureError
+                if _schema_error_is_structural(error)
+                else ContractValidationError
+            )
+            raise validation_error(
                 f"judge response is not valid {schema.__name__} JSON: {error}"
             ) from error
 
@@ -747,6 +785,24 @@ def _decode_json_object(raw: str) -> dict[str, Any]:
     if not isinstance(decoded, dict):
         raise ValueError("top-level judge response must be an object")
     return decoded
+
+
+def _schema_error_is_structural(error: ValidationError) -> bool:
+    """Separate JSON/schema shape defects from invalid judgment semantics."""
+
+    semantic_error_types = {
+        "enum",
+        "greater_than",
+        "greater_than_equal",
+        "less_than",
+        "less_than_equal",
+        "literal_error",
+        "string_pattern_mismatch",
+        "too_long",
+        "too_short",
+        "value_error",
+    }
+    return all(item["type"] not in semantic_error_types for item in error.errors())
 
 
 def _validate_request_category_ids(
@@ -910,6 +966,35 @@ def _repair_prompt(original: str, *, attempt: int, error: Exception) -> str:
         f"{str(error)[:1200]}\n"
         "Return a corrected final submission. Do not discuss the error and do not use Markdown.\n"
         "END_CONTRACT_REPAIR"
+    )
+
+
+def _json_structure_repair_prompt(
+    malformed_output: str,
+    *,
+    payload_schema: type[ContractModel],
+    error: Exception,
+) -> str:
+    schema = _structured_response_format(payload_schema)["json_schema"]["schema"]
+    payload = json.dumps(
+        {
+            "malformed_output": malformed_output,
+            "validation_error": str(error)[:1200],
+            "required_json_schema": schema,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    return (
+        "TRUSTED_INSTRUCTION\n"
+        "Repair JSON syntax and schema shape only. Preserve every semantic value from "
+        "malformed_output exactly. You may remove Markdown fences, fix quoting, rename an "
+        "obvious misspelled schema key, and correct object/array wrappers. Do not infer, "
+        "add, delete, reinterpret, or replace any decision, category, score, label, rule, "
+        "or status. If a required semantic value is absent, do not invent one. Return one "
+        "JSON object only, without commentary.\n"
+        "END_TRUSTED_INSTRUCTION\n"
+        f"UNTRUSTED_DATA\n{payload}\nEND_UNTRUSTED_DATA"
     )
 
 
