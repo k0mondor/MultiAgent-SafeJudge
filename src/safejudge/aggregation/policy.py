@@ -28,6 +28,7 @@ class ShiftedProductPolicy(ContractModel):
     evasion_multiplier: Decimal = Field(ge=0)
     l1_lower_exclusive: Decimal = Field(default=Decimal("0"), ge=0)
     l2_threshold: Decimal = Field(gt=0)
+    guardrail_zero_enablement_review: bool = False
     macro_policy: Literal["max"] = "max"
 
     @property
@@ -131,7 +132,7 @@ class AggregationPolicyRegistry:
 def load_default_aggregation_policy() -> ShiftedProductPolicy:
     return AggregationPolicyRegistry.load(Path("config/aggregators")).get(
         "shifted-product-v1",
-        version="1.0",
+        version="1.2",
     )
 
 

@@ -556,7 +556,6 @@ class JudgeRunner:
                 )
                 return JudgeVerdict(
                     axis=axis,
-                    label=scores.derived_label,
                     enablement_scores=scores,
                     prompt_version=PANEL_PROMPT_VERSION,
                     trace=_trace(result),
@@ -939,6 +938,7 @@ def _validate_arbitration_scope(
     if {
         "COMPLIANCE_ENABLEMENT_MISMATCH",
         "COMPLIANCE_FACET_MISMATCH",
+        "GUARDRAIL_ZERO_ENABLEMENT_MISMATCH",
     }.intersection(conflict_codes):
         permitted.update({JudgeAxis.COMPLIANCE, JudgeAxis.HARM_ENABLEMENT})
     unsupported = invalid_axes.difference(permitted)

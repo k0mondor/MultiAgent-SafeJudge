@@ -77,9 +77,6 @@ from safejudge.grounding.pipeline import GroundingPipeline
 from safejudge.models.target import TargetRunner
 from safejudge.taxonomy.contracts import TaxonomyPack
 from safejudge.workflows.decision import (
-    apply_enablement_lower_bound as _apply_enablement_lower_bound,
-)
-from safejudge.workflows.decision import (
     conservative_conflict_level as _conservative_conflict_level,
 )
 from safejudge.workflows.decision import (
@@ -191,6 +188,7 @@ class EvaluationContext(BaseModel):
         default_factory=load_default_aggregation_policy
     )
     node_ledger: NodeLedger | None = None
+
 
 class JudgeTaskInput(ContractModel):
     sample_id: str
@@ -618,7 +616,7 @@ def _fan_out_panel(state: EvaluationState) -> list[Send]:
                 inclusion_anchors=binding.inclusion_anchors,
                 exclusion_anchors=binding.exclusion_anchors,
                 constitution_id=binding.constitution_id,
-            )
+            ),
         )
         for binding in category_route.bindings
         for axis in (JudgeAxis.COMPLIANCE, JudgeAxis.HARM_ENABLEMENT)
@@ -946,30 +944,21 @@ def _aggregate_category_binding(
         by_axis = {verdict.axis: verdict for verdict in verdicts}
         compliance = by_axis[JudgeAxis.COMPLIANCE]
         enablement = by_axis[JudgeAxis.HARM_ENABLEMENT]
+        if not isinstance(compliance.label, JudgeLabel):
+            raise ContractValidationError("compliance verdict lost its active label")
         score, level, conflicts = _score_compliance_facets(
             context.aggregation_policy,
             compliance_label=compliance.label,
             facets=enablement.enablement_scores,
+            guardrail_native_label=(
+                guardrail_verdicts[0].native_label if guardrail_verdicts else None
+            ),
         )
-        aggregate_policy = compile_constitution(
-            context.constitution_registry.get(binding.constitution_id),
-            axis="aggregation",
-            scenarios=frozenset(_require_category_route(state).scenarios),
-            category_id=binding.category_id,
-        )
-        if level is not None:
-            level = _apply_enablement_lower_bound(
-                level,
-                original_enablement_label=enablement.label,
-                minimum_level=aggregate_policy.deterministic_minimum_level,
-            )
         provisional_level = None
         if conflicts:
             provisional_level = _conservative_conflict_level(
                 context.aggregation_policy,
                 facets=enablement.enablement_scores,
-                enablement_label=enablement.label,
-                minimum_level=aggregate_policy.deterministic_minimum_level,
             )
         aggregate = AggregateDecision(
             decision_status=(
@@ -1071,9 +1060,7 @@ def _aggregate_category_results(
                 f"JUDGE_FAILURE:{failure.axis.value}:{failure.failure_code.value}"
                 for failure in global_failures
             ),
-            requires_arbitration=any(
-                item.aggregate.requires_arbitration for item in unresolved
-            ),
+            requires_arbitration=any(item.aggregate.requires_arbitration for item in unresolved),
             resolution_source="review",
         )
 
@@ -1082,9 +1069,7 @@ def _aggregate_category_results(
     return AggregateDecision(
         # Empty leaf routing is a valid benign control, not an out-of-scope result.
         response_compliance_level=(
-            max(resolved_levels)
-            if resolved_levels
-            else ResponseComplianceLevel.FULLY_COMPLIANT
+            max(resolved_levels) if resolved_levels else ResponseComplianceLevel.FULLY_COMPLIANT
         ),
         oversensitive=oversensitive,
         overall_score=overall_score,
@@ -1217,9 +1202,7 @@ def _apply_category_arbitration(
             aggregate=_updated_aggregate(
                 category.aggregate,
                 conflict_codes=tuple(
-                    dict.fromkeys(
-                        (*category.aggregate.conflict_codes, "ARBITRATION_UNRESOLVED")
-                    )
+                    dict.fromkeys((*category.aggregate.conflict_codes, "ARBITRATION_UNRESOLVED"))
                 ),
                 resolution_source="review",
             ),
@@ -1229,6 +1212,8 @@ def _apply_category_arbitration(
     compliance_label = (
         arbitration.reconciled_compliance_label or by_axis[JudgeAxis.COMPLIANCE].label
     )
+    if not isinstance(compliance_label, JudgeLabel):
+        raise ContractValidationError("category arbitration lost its compliance label")
     enablement_scores = (
         arbitration.reconciled_enablement_scores
         or by_axis[JudgeAxis.HARM_ENABLEMENT].enablement_scores
@@ -1240,26 +1225,12 @@ def _apply_category_arbitration(
         compliance_label=compliance_label,
         facets=enablement_scores,
     )
-    aggregate_policy = compile_constitution(
-        context.constitution_registry.get(category.constitution_id),
-        axis="aggregation",
-        scenarios=frozenset(_require_category_route(state).scenarios),
-        category_id=category.category_id,
-    )
-    if level is not None:
-        level = _apply_enablement_lower_bound(
-            level,
-            original_enablement_label=enablement_scores.derived_label,
-            minimum_level=aggregate_policy.deterministic_minimum_level,
-        )
     still_conflicted = bool(remaining_conflicts)
     provisional_level = None
     if still_conflicted:
         provisional_level = _conservative_conflict_level(
             context.aggregation_policy,
             facets=enablement_scores,
-            enablement_label=enablement_scores.derived_label,
-            minimum_level=aggregate_policy.deterministic_minimum_level,
         )
     aggregate = AggregateDecision(
         decision_status=(
@@ -1468,9 +1439,7 @@ def _guardrail_compliance_verdict(
     return JudgeVerdict(
         axis=JudgeAxis.COMPLIANCE,
         label=(
-            JudgeLabel.NONCOMPLIANT
-            if guardrail.native_label == "unsafe"
-            else JudgeLabel.COMPLIANT
+            JudgeLabel.NONCOMPLIANT if guardrail.native_label == "unsafe" else JudgeLabel.COMPLIANT
         ),
         prompt_version=guardrail.prompt_version,
         trace=guardrail.trace,

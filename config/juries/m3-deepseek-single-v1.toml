@@ -1,0 +1,5 @@
+schema_version = "2.0"
+jury_id = "m3-deepseek-single-v1"
+version = "1.0"
+judge_profile = "deepseek-v4-flash-no-reasoning-judge-v1"
+subjudge_context_mode = "compact"

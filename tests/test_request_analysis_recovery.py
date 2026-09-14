@@ -154,8 +154,9 @@ class RequestAnalysisRecoveryTests(unittest.TestCase):
 
         self.assertIn("Evidence sufficiency is about whether", sufficiency_prompt)
         self.assertIn("resolved benign, in-scope", sufficiency_prompt)
-        self.assertIn("Catch-all leaves are nevertheless legitimate", category_prompt)
-        self.assertIn("create or distribute malware", category_prompt)
+        self.assertIn("selecting the applicable catch-all leaf is required", category_prompt)
+        self.assertIn("behavior-family anchors", category_prompt)
+        self.assertIn("cyber intrusion or malware", category_prompt)
         self.assertIn("in-scope benign control", scope_prompt)
         self.assertIn("never neutralizes an explicit act", scope_prompt)
         self.assertNotIn('"target_response":', sufficiency_prompt)
