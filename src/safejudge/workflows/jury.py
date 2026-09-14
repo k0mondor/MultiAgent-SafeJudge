@@ -1,4 +1,4 @@
-"""Runtime wiring for one Judge model shared by all judging stages."""
+"""Runtime wiring for coordinator, enablement, and guardrail Judge roles."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, model_validator
 
 from safejudge.contracts.judging import JudgeAxis
 from safejudge.contracts.jury import (
+    EnablementIntentMode,
     JuryDefinition,
     JuryIdentity,
     SubjudgeContextMode,
@@ -27,6 +28,7 @@ class JuryRuntime(BaseModel):
 
     identity: JuryIdentity
     runner: JudgeRunner
+    enablement_runner: JudgeRunner | None = None
     category_guardrail: LlamaGuardCategoryRunner | None = None
 
     @model_validator(mode="after")
@@ -36,6 +38,16 @@ class JuryRuntime(BaseModel):
             or self.runner.profile.fingerprint != self.identity.profile_hash
         ):
             raise ValueError("Judge runner does not match identity")
+        enablement_identity = self.identity.enablement_judge
+        if self.enablement_runner is None:
+            if enablement_identity is not None:
+                raise ValueError("Jury identity requires an enablement Judge")
+        elif (
+            enablement_identity is None
+            or self.enablement_runner.profile.profile_id != enablement_identity.profile_id
+            or self.enablement_runner.profile.fingerprint != enablement_identity.profile_hash
+        ):
+            raise ValueError("enablement Judge runner does not match identity")
         guardrail_identity = self.identity.category_guardrail
         if self.category_guardrail is None:
             if guardrail_identity is not None:
@@ -56,7 +68,8 @@ class JuryRuntime(BaseModel):
         self,
         axis: JudgeAxis,
     ) -> JudgeRunner:
-        del axis
+        if axis is JudgeAxis.HARM_ENABLEMENT and self.enablement_runner is not None:
+            return self.enablement_runner
         return self.runner
 
     @property
@@ -68,6 +81,12 @@ class JuryRuntime(BaseModel):
         """Resolve legacy plans to their historical full-context behavior."""
 
         return self.identity.subjudge_context_mode or "full"
+
+    @property
+    def enablement_intent_mode(self) -> EnablementIntentMode | None:
+        """Return the explicit four-axis Intent ablation, if configured."""
+
+        return self.identity.enablement_intent_mode
 
     @property
     def intent(self) -> JudgeRunner:
@@ -82,6 +101,7 @@ def build_jury_runtime(
     definition: JuryDefinition,
     *,
     provider: ModelProvider,
+    enablement_provider: ModelProvider | None = None,
     guardrail_provider: ModelProvider | None = None,
     store: SQLiteModelStore,
     policy: InvocationPolicy,
@@ -96,6 +116,29 @@ def build_jury_runtime(
         ModelInvoker(provider=provider, store=store, policy=policy),
         profile=profile,
     )
+    enablement_runner = None
+    enablement_profile = definition.enablement_profile
+    if enablement_profile is not None:
+        if enablement_provider is None:
+            raise ConfigurationError("enablement Judge provider is required")
+        expected_enablement_provider = (
+            "local-openai"
+            if enablement_provider.provider_name == "local"
+            else enablement_provider.provider_name
+        )
+        if (
+            expected_enablement_provider != enablement_profile.provider
+            or enablement_provider.model_id != enablement_profile.model_id
+        ):
+            raise ConfigurationError("provider does not match enablement Judge profile")
+        enablement_runner = JudgeRunner(
+            ModelInvoker(provider=enablement_provider, store=store, policy=policy),
+            profile=enablement_profile,
+        )
+    elif enablement_provider is not None:
+        raise ConfigurationError(
+            "enablement Judge provider supplied without a configured profile"
+        )
     guardrail_runner = None
     guardrail_profile = definition.category_guardrail_profile
     guardrail_policy = definition.category_guardrail_policy
@@ -128,5 +171,6 @@ def build_jury_runtime(
     return JuryRuntime(
         identity=definition.identity,
         runner=runner,
+        enablement_runner=enablement_runner,
         category_guardrail=guardrail_runner,
     )

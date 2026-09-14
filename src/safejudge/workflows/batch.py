@@ -150,6 +150,7 @@ async def run_evaluation_batch(
     context: InvocationContext,
     jury_definition: JuryDefinition,
     judge_provider: ModelProvider,
+    enablement_judge_provider: ModelProvider | None = None,
     category_guardrail_provider: ModelProvider | None = None,
     max_concurrency: int = 3,
     max_sample_concurrency: int = 1,
@@ -191,6 +192,7 @@ async def run_evaluation_batch(
     jury = build_jury_runtime(
         jury_definition,
         provider=judge_provider,
+        enablement_provider=enablement_judge_provider,
         guardrail_provider=category_guardrail_provider,
         store=store,
         policy=InvocationPolicy(

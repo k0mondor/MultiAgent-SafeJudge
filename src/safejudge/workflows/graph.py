@@ -830,6 +830,11 @@ def _build_judge_subgraph(
                     exclusion_anchors=state.exclusion_anchors,
                     constitution_id=state.constitution_id,
                     context_mode=runtime.context.jury.subjudge_context_mode,
+                    enablement_intent_mode=(
+                        runtime.context.jury.enablement_intent_mode
+                        if axis is JudgeAxis.HARM_ENABLEMENT
+                        else None
+                    ),
                     context=runtime.context.invocation,
                     parameters=runtime.context.judge_parameters,
                 )

@@ -32,7 +32,7 @@ from safejudge.contracts.judging import (
     RequestSnapshot,
     ScopeStatus,
 )
-from safejudge.contracts.jury import SubjudgeContextMode
+from safejudge.contracts.jury import EnablementIntentMode, SubjudgeContextMode
 from safejudge.contracts.model import (
     InputModality,
     InvocationContext,
@@ -502,6 +502,7 @@ class JudgeRunner:
         exclusion_anchors: tuple[str, ...] = (),
         constitution_id: str | None = None,
         context_mode: SubjudgeContextMode = "full",
+        enablement_intent_mode: EnablementIntentMode | None = None,
         context: InvocationContext,
         parameters: Mapping[str, JsonValue] | None = None,
     ) -> JudgeVerdict:
@@ -537,6 +538,7 @@ class JudgeRunner:
                 inclusion_anchors=inclusion_anchors,
                 exclusion_anchors=exclusion_anchors,
                 context_mode=context_mode,
+                enablement_intent_mode=enablement_intent_mode,
             ),
             context=context,
             parameters=parameters,

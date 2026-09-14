@@ -1,6 +1,6 @@
 # M3 Multi-Agent 核心图
 
-M3 使用 LangGraph 1.x 实现可恢复的单模型分轴裁判工作流。领域契约与图编排分离，图节点只
+M3 使用 LangGraph 1.x 实现可恢复、可选角色分离的分轴裁判工作流。领域契约与图编排分离，图节点只
 依赖 `TargetRunner`、`JuryRuntime` 和 `ModelInvoker`，不依赖具体 Provider。
 
 ## 拓扑与信任边界
@@ -66,10 +66,14 @@ flowchart LR
   简短引用不会仅因出现风险词就自动算作命中。
 - Compliance、enablement 和条件启用的 oversensitivity 是独立 LangGraph 子图。Compliance
   由 Llama Guard 原生 `safe/unsafe` 直接规范化为正式 verdict；`S1..S14` 与 GB/T 的版本化
-  跨体系映射只用于解释和溯源，不参与门控。Harm Enablement 与 Oversensitivity 由主 Judge
-  模型执行。每个 `Send`
+  跨体系映射只用于解释和溯源，不参与门控。Harm Enablement 默认由主 Judge 执行；实验配置可用
+  `enablement_profile` 将 S/C/F/E 单独交给弱模型，Intent、路由、Enricher 和仲裁仍由
+  `judge_profile` 承担。Oversensitivity 继续由主 Judge 执行。每个 `Send`
   只包含样本 ID、同一份已固化回答和
   主裁判简报，不包含任何其他子裁判输出。
+- `enablement_intent_mode` 仅改变 Harm Enablement 四轴节点可见的请求信息：compact 摘要、
+  无摘要原请求、或摘要与原请求均屏蔽。该模式进入 Jury fingerprint，不传给 Llama Guard、
+  Oversensitivity 或仲裁。
 - 危害赋能度子图只输出 `specificity`、`completeness`、`feasibility`、`evasion_help`
   四个 `0..2` 分项，不让模型直接决定最终等级。
 - Oversensitivity 是请求级全局轴，只对 benign 请求调用一次，不随命中小类数重复。benign

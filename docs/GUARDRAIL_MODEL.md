@@ -29,6 +29,29 @@ Harm Enablement verdict 只持久化 S/C/F/E 四轴，不再生成或保存
 `no_enablement/limited_enablement/high_enablement` 中间标签。最终 L0/L1/L2 只有上述
 乘法分数和阈值这一套来源。
 
+实验 Jury 可选声明 `enablement_profile`，把 S/C/F/E 四轴交给与主协调模型不同的弱模型。
+未声明时继续由 `judge_profile` 执行，保持既有配置、Jury hash 和缓存兼容。声明后，
+`judge_profile` 仍负责 Intent、请求小类路由、Response Risk Enricher、Oversensitivity 和仲裁；
+`enablement_profile` 只接收当前小类的 compact/full 事实包并输出 S/C/F/E，不参与请求理解或
+最终等级计算。两个角色的 profile ID 与 hash 都进入 Jury identity，防止实验条件混淆。
+
+四轴 Intent 消融由独立、版本化且进入 Jury fingerprint 的 `enablement_intent_mode` 控制，
+不会改变路由、Llama Guard、仲裁、阈值或聚合公式：
+
+- `intent_on_compact`：四轴 Judge 只读取上游 Intent 摘要，不读取原请求；
+- `intent_off_raw`：四轴 Judge 不读取 Intent 摘要，直接读取原请求；
+- `intent_off_masked`：四轴 Judge 不读取 Intent 摘要或原请求，只读取 Grounding、当前小类、
+  冻结回答和轴规则。
+
+未声明该字段的旧配置继续使用原 `subjudge_context_mode` 语义，保持兼容。角色分离运行清单
+显式保存 Coordinator、Enablement Judge 和 Llama Guard 的 model、profile ID 与 profile hash。
+
+仓库提供三份角色分离实验计划：
+
+- `m3-deepseek-seed-enable-llamaguard-compact-v1.toml`：DeepSeek 协调、Seed Mini 四轴、compact；
+- `m3-deepseek-seed-enable-llamaguard-full-v1.toml`：相同模型分工、full；
+- `m3-seed-llamaguard-compact-v1.toml`：Seed Mini 同时负责协调和四轴，作为弱模型全流程基线。
+
 ## 上下文隔离
 
 两份 DeepSeek + Llama Guard 配置都固定使用 `subjudge_context_mode = "compact"`。信息边界如下：
@@ -37,7 +60,7 @@ Harm Enablement verdict 只持久化 S/C/F/E 四轴，不再生成或保存
   同时输出流程用 Intent 与正式的请求侧国标多标签；
 - Request Analyzer 和类别为空时的定向复查均不读取 TargetResponse；随后独立的 Response Risk
   Enricher 读取冻结回答，只能补充 `response_added_category_ids`，不能删除或改写请求类别；
-- 下游 DeepSeek Enablement/Oversensitivity 子裁判不再读取原请求全文，只接收请求哈希、
+- 下游 Enablement/Oversensitivity 子裁判不再读取原请求全文，只接收请求哈希、
   `request_intent`、`scope_status`、`requested_action`、`intent_basis`、受控 Grounding 观察、
   完整 TargetResponse 和当前小类对应的 Constitution；Oversensitivity 是良性请求上的一次
   全局判断，不按叶子小类重复；

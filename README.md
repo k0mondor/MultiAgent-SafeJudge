@@ -10,6 +10,9 @@ Harm Enablement、Oversensitivity 和仲裁；Llama Guard 作为正式的逐小�
 版本化跨体系映射只用于解释和溯源，不参与 Compliance 门控。
 媒体与请求理解在上游完成；正式 DeepSeek + Llama Guard 配置中的下游子裁判仅接收版本化的
 紧凑事实包、完整待评回答和对应 Constitution，不再接收原请求的全部长上下文。
+实验配置可以通过 `enablement_profile` 将 S/C/F/E 四轴单独交给 API 或本地弱模型，
+同时保留 DeepSeek 负责 Intent/路由/仲裁，用于验证意图预处理与短上下文任务分解的增益；
+未配置该字段时保持原有单主 Judge 行为。
 Request Analyzer 还会把“语义本身不明确、Grounding 证据不足、可信证据互相矛盾、范围外”
 分开记录；系统/API/结构化输出故障不会伪装成人工复核语义。Oversensitivity 作为请求级全局
 裁判仅在良性请求上调用一次，良性请求零风险小类仍得到 L0，并单独报告是否过度拒绝。

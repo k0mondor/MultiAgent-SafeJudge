@@ -1,4 +1,4 @@
-"""Versioned contract for one Judge model used by every judging stage."""
+"""Versioned contracts for coordinator, enablement, and guardrail Judge roles."""
 
 from __future__ import annotations
 
@@ -22,6 +22,11 @@ from safejudge.guardrails.policy import (
 from safejudge.models.profiles import JudgeAdapterKind, ModelProfile, ModelRegistry
 
 SubjudgeContextMode = Literal["full", "compact"]
+EnablementIntentMode = Literal[
+    "intent_on_compact",
+    "intent_off_raw",
+    "intent_off_masked",
+]
 
 
 class GuardrailIdentity(ContractModel):
@@ -35,16 +40,27 @@ class GuardrailIdentity(ContractModel):
     prompt_version: NonEmptyString
 
 
+class JudgeRoleIdentity(ContractModel):
+    """Reproducible identity for an optional specialized Judge role."""
+
+    provider: NonEmptyString
+    model: NonEmptyString
+    profile_id: NonEmptyString
+    profile_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
 class JuryPlan(ContractModel):
-    """Main Judge plus an optional per-category guardrail Compliance judge."""
+    """Coordinator plus optional enablement and per-category guardrail Judges."""
 
     schema_version: Literal["2.0"] = "2.0"
     jury_id: str = Field(min_length=1, pattern=r"^[a-z0-9][a-z0-9._-]*$")
     version: NonEmptyString
     judge_profile: NonEmptyString
+    enablement_profile: NonEmptyString | None = None
     category_guardrail_profile: NonEmptyString | None = None
     category_guardrail_policy: NonEmptyString | None = None
     subjudge_context_mode: SubjudgeContextMode | None = None
+    enablement_intent_mode: EnablementIntentMode | None = None
 
     @model_validator(mode="after")
     def guardrail_fields_are_paired(self) -> JuryPlan:
@@ -52,6 +68,10 @@ class JuryPlan(ContractModel):
             raise ValueError(
                 "category_guardrail_profile and category_guardrail_policy "
                 "must be configured together"
+            )
+        if self.enablement_intent_mode is not None and self.enablement_profile is None:
+            raise ValueError(
+                "enablement_intent_mode requires a separate enablement_profile"
             )
         return self
 
@@ -77,6 +97,15 @@ class JuryPlan(ContractModel):
             role=ModelRole.JUDGE,
             allow_unqualified=allow_unqualified,
         )
+        enablement_profile = (
+            registry.get(
+                self.enablement_profile,
+                role=ModelRole.JUDGE,
+                allow_unqualified=allow_unqualified,
+            )
+            if self.enablement_profile is not None
+            else None
+        )
         guardrail_profile: ModelProfile | None = None
         guardrail_policy: GuardrailPolicy | None = None
         if self.category_guardrail_profile is not None:
@@ -94,20 +123,23 @@ class JuryPlan(ContractModel):
             jury_id=self.jury_id,
             version=self.version,
             profile=profile,
+            enablement_profile=enablement_profile,
             guardrail_profile=guardrail_profile,
             guardrail_policy=guardrail_policy,
             subjudge_context_mode=self.subjudge_context_mode,
+            enablement_intent_mode=self.enablement_intent_mode,
         )
         return JuryDefinition(
             identity=identity,
             profile=profile,
+            enablement_profile=enablement_profile,
             category_guardrail_profile=guardrail_profile,
             category_guardrail_policy=guardrail_policy,
         )
 
 
 class JuryIdentity(ContractModel):
-    """Reproducible identity of the single Judge model used for the whole run."""
+    """Reproducible identity of every Judge role used for the run."""
 
     schema_version: Literal["2.0"] = "2.0"
     jury_id: NonEmptyString
@@ -116,8 +148,11 @@ class JuryIdentity(ContractModel):
     model: NonEmptyString
     profile_id: NonEmptyString
     profile_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    coordinator: JudgeRoleIdentity | None = None
+    enablement_judge: JudgeRoleIdentity | None = None
     category_guardrail: GuardrailIdentity | None = None
     subjudge_context_mode: SubjudgeContextMode | None = None
+    enablement_intent_mode: EnablementIntentMode | None = None
 
     @classmethod
     def from_profiles(
@@ -126,9 +161,11 @@ class JuryIdentity(ContractModel):
         jury_id: str,
         version: str,
         profile: ModelProfile,
+        enablement_profile: ModelProfile | None = None,
         guardrail_profile: ModelProfile | None = None,
         guardrail_policy: GuardrailPolicy | None = None,
         subjudge_context_mode: SubjudgeContextMode | None = None,
+        enablement_intent_mode: EnablementIntentMode | None = None,
     ) -> JuryIdentity:
         if (guardrail_profile is None) != (guardrail_policy is None):
             raise ConfigurationError("guardrail profile and policy must be supplied together")
@@ -144,6 +181,22 @@ class JuryIdentity(ContractModel):
                 adapter_version=LLAMA_GUARD_ADAPTER_VERSION,
                 prompt_version=LLAMA_GUARD_PROMPT_VERSION,
             )
+        enablement_identity = None
+        if enablement_profile is not None:
+            enablement_identity = JudgeRoleIdentity(
+                provider=enablement_profile.provider,
+                model=enablement_profile.model_id,
+                profile_id=enablement_profile.profile_id,
+                profile_hash=enablement_profile.fingerprint,
+            )
+        coordinator_identity = None
+        if enablement_profile is not None:
+            coordinator_identity = JudgeRoleIdentity(
+                provider=profile.provider,
+                model=profile.model_id,
+                profile_id=profile.profile_id,
+                profile_hash=profile.fingerprint,
+            )
         return cls(
             jury_id=jury_id,
             version=version,
@@ -151,8 +204,11 @@ class JuryIdentity(ContractModel):
             model=profile.model_id,
             profile_id=profile.profile_id,
             profile_hash=profile.fingerprint,
+            coordinator=coordinator_identity,
+            enablement_judge=enablement_identity,
             category_guardrail=guardrail_identity,
             subjudge_context_mode=subjudge_context_mode,
+            enablement_intent_mode=enablement_intent_mode,
         )
 
     @classmethod
@@ -174,6 +230,12 @@ class JuryIdentity(ContractModel):
         # unspecified. New plans opt in explicitly and therefore get a new identity.
         if self.subjudge_context_mode is None:
             payload.pop("subjudge_context_mode", None)
+        if self.enablement_judge is None:
+            payload.pop("enablement_judge", None)
+        if self.coordinator is None:
+            payload.pop("coordinator", None)
+        if self.enablement_intent_mode is None:
+            payload.pop("enablement_intent_mode", None)
         encoded = json.dumps(
             payload,
             ensure_ascii=False,
@@ -184,13 +246,14 @@ class JuryIdentity(ContractModel):
 
 
 class JuryDefinition:
-    """Resolved single-Judge plan used to build the runtime runner."""
+    """Resolved role-separated Jury plan used to build runtime runners."""
 
     def __init__(
         self,
         *,
         identity: JuryIdentity,
         profile: ModelProfile,
+        enablement_profile: ModelProfile | None = None,
         category_guardrail_profile: ModelProfile | None = None,
         category_guardrail_policy: GuardrailPolicy | None = None,
     ) -> None:
@@ -203,6 +266,24 @@ class JuryDefinition:
             raise ConfigurationError(
                 "category guardrail profile and policy must be supplied together"
             )
+        enablement_identity = identity.enablement_judge
+        coordinator_identity = identity.coordinator
+        if enablement_profile is None:
+            if enablement_identity is not None:
+                raise ConfigurationError(
+                    "Jury identity declares an enablement Judge but the definition does not"
+                )
+        elif (
+            enablement_identity is None
+            or enablement_identity.profile_id != enablement_profile.profile_id
+            or enablement_identity.profile_hash != enablement_profile.fingerprint
+        ):
+            raise ConfigurationError("enablement Judge profile does not match run identity")
+        if coordinator_identity is not None and (
+            coordinator_identity.profile_id != profile.profile_id
+            or coordinator_identity.profile_hash != profile.fingerprint
+        ):
+            raise ConfigurationError("coordinator profile does not match run identity")
         guardrail_identity = identity.category_guardrail
         if category_guardrail_profile is None:
             if guardrail_identity is not None:
@@ -223,6 +304,7 @@ class JuryDefinition:
             raise ConfigurationError("category guardrail does not match run identity")
         self.identity = identity
         self.profile = profile
+        self.enablement_profile = enablement_profile
         self.category_guardrail_profile = category_guardrail_profile
         self.category_guardrail_policy = category_guardrail_policy
 

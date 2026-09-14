@@ -460,6 +460,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                         artifact_root=args.artifact_root.resolve(),
                         judge_env_file=args.judge_env_file,
                     ),
+                    enablement_judge_provider=_enablement_jury_provider(
+                        definition,
+                        artifact_root=args.artifact_root.resolve(),
+                        judge_env_file=args.judge_env_file,
+                    ),
                     category_guardrail_provider=_category_guardrail_provider(
                         definition,
                         artifact_root=args.artifact_root.resolve(),
@@ -482,6 +487,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "jury_id": evaluation_result.manifest.jury.jury_id,
                     "jury_hash": evaluation_result.manifest.jury_hash,
                     "judge_model": evaluation_result.manifest.jury.model,
+                    "enablement_judge_model": (
+                        evaluation_result.manifest.jury.enablement_judge.model
+                        if evaluation_result.manifest.jury.enablement_judge is not None
+                        else evaluation_result.manifest.jury.model
+                    ),
                     "subjudge_context_mode": (
                         evaluation_result.manifest.jury.subjudge_context_mode or "full"
                     ),
@@ -669,6 +679,22 @@ def _jury_provider(
     return _text_judge_provider(
         definition.profile,
         artifact_root=artifact_root / "judge",
+        judge_env_file=judge_env_file,
+    )
+
+
+def _enablement_jury_provider(
+    definition: JuryDefinition,
+    *,
+    artifact_root: Path,
+    judge_env_file: Path,
+) -> ModelProvider | None:
+    profile = definition.enablement_profile
+    if profile is None:
+        return None
+    return _text_judge_provider(
+        profile,
+        artifact_root=artifact_root / "enablement-judge",
         judge_env_file=judge_env_file,
     )
 

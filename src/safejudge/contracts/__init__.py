@@ -40,6 +40,8 @@ from safejudge.contracts.judging import (
     ScopeStatus,
 )
 from safejudge.contracts.jury import (
+    EnablementIntentMode,
+    JudgeRoleIdentity,
     JuryIdentity,
     JuryPlan,
 )
@@ -64,6 +66,7 @@ __all__ = [
     "CategoryAnalysis",
     "CategoryEvaluationResult",
     "DatasetSplit",
+    "EnablementIntentMode",
     "EnablementScores",
     "EvaluationResult",
     "EvaluationSpec",
@@ -78,6 +81,7 @@ __all__ = [
     "JudgeFailureCode",
     "JudgeLabel",
     "JudgeModelRef",
+    "JudgeRoleIdentity",
     "JudgeVerdict",
     "JuryIdentity",
     "JuryPlan",
