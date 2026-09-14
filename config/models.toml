@@ -430,6 +430,25 @@ temperature = 0
 max_tokens = 2048
 
 [[models]]
+profile_id = "gemma-4-26b-judge-v3"
+profile_version = "3"
+provider = "openrouter"
+model_id = "google/gemma-4-26b-a4b-it"
+roles = ["judge"]
+structured_output_mode = "native_json_schema"
+qualification_status = "candidate"
+max_contract_retries = 1
+openrouter_require_parameters = true
+openrouter_response_healing = true
+
+[[models.retry_parameters]]
+max_tokens = 4096
+
+[models.default_parameters]
+temperature = 0
+max_tokens = 2048
+
+[[models]]
 profile_id = "gemini-2.5-flash-judge-v1"
 profile_version = "1"
 provider = "openrouter"
