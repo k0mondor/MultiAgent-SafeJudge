@@ -891,7 +891,13 @@ def _judge_parameters(
         )
         if profile.provider == "openrouter":
             if profile.openrouter_require_parameters:
-                resolved["provider"] = cast(JsonValue, {"require_parameters": True})
+                provider_options = resolved.get("provider", {})
+                if not isinstance(provider_options, dict):
+                    raise ConfigurationError("profile provider routing must be an object")
+                resolved["provider"] = cast(
+                    JsonValue,
+                    {**provider_options, "require_parameters": True},
+                )
             if profile.openrouter_response_healing:
                 resolved["plugins"] = cast(JsonValue, [{"id": "response-healing"}])
     return resolved

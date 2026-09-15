@@ -50,12 +50,14 @@ class GroundingPipeline:
         mode: GroundingMode,
         tools: tuple[GroundingTool, ...] = (),
         pipeline_id: str = "safejudge-request-grounding",
-        pipeline_version: str = "1.0",
+        pipeline_version: str | None = None,
     ) -> None:
         self.mode = mode
         self.tools = tools
         self.pipeline_id = pipeline_id
-        self.pipeline_version = pipeline_version
+        self.pipeline_version = pipeline_version or (
+            "1.1" if mode is GroundingMode.BENCHMARK_ASSISTED else "1.0"
+        )
 
     @property
     def fingerprint(self) -> str:
@@ -148,11 +150,15 @@ class GroundingPipeline:
         sample: CanonicalMultimodalSample,
     ) -> GroundingArtifact:
         context = sample.request_context
+        paired_text = sample.metadata.get("corresponding_text")
+        if not isinstance(paired_text, str) or not paired_text.strip():
+            paired_text = None
         text = json.dumps(
             {
                 "declared_intent": context.intent.value,
                 "declared_risk_category": context.risk_category,
                 "declared_attack_type": context.attack_type,
+                "official_corresponding_text": paired_text,
             },
             ensure_ascii=False,
             sort_keys=True,
@@ -163,7 +169,7 @@ class GroundingPipeline:
             text=text,
             confidence=1,
             tool_id="benchmark-adapter-context",
-            tool_version="1.0",
+            tool_version="1.1",
         )
         observation = GroundingObservation.from_raw(raw, evidence_id="G000")
         return GroundingArtifact.create(

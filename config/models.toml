@@ -353,6 +353,30 @@ temperature = 0
 max_tokens = 1536
 reasoning = { enabled = false }
 
+# Pin exact endpoint tags that support response_format; OpenInference was
+# observed to return empty GB/T leaves for harmful requests.
+[[models]]
+profile_id = "deepseek-v4-flash-routed-judge-v3"
+profile_version = "3"
+provider = "openrouter"
+model_id = "deepseek/deepseek-v4-flash"
+roles = ["judge"]
+structured_output_mode = "native_json_schema"
+qualification_status = "candidate"
+max_contract_retries = 1
+openrouter_require_parameters = true
+openrouter_response_healing = true
+
+[[models.retry_parameters]]
+max_tokens = 3072
+reasoning = { enabled = false }
+
+[models.default_parameters]
+temperature = 0
+max_tokens = 1536
+reasoning = { enabled = false }
+provider = { only = ["deepinfra/fp8", "alibaba/fp8", "venice"], allow_fallbacks = false }
+
 [[models]]
 profile_id = "kimi-k2.6-no-reasoning-judge-v1"
 profile_version = "1"
