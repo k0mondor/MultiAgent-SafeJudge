@@ -148,6 +148,10 @@ class SingleJudgePlanTests(unittest.TestCase):
             definition.identity.fingerprint,
             "6d67aa48d9247848f54b5390da8fdb59b0954d1e496520ba6fdb3f16041bdf48",
         )
+        self.assertEqual(
+            definition.identity.category_guardrail.prompt_version,
+            "llama-guard-native-chat-v2-controlled-context",
+        )
 
     def test_runtime_dispatches_only_harm_enablement_to_specialized_runner(self) -> None:
         registry = ModelRegistry.load(Path("config/models.toml"))
