@@ -24,6 +24,7 @@ from safejudge.contracts.evaluation import (
     TargetResponse,
 )
 from safejudge.contracts.judging import (
+    AggregateDecision,
     DecisionStatus,
     EnablementScores,
     EvaluationResult,
@@ -547,7 +548,7 @@ class CategoryWorkflowIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 category_guardrail_provider=_SafeScriptedGuardrailProvider(),
                 taxonomy_pack=taxonomy,
                 constitution_registry=constitutions,
-                grounding_pipeline=GroundingPipeline(mode=GroundingMode.BENCHMARK_ASSISTED),
+                grounding_pipeline=GroundingPipeline(mode=GroundingMode.BLIND),
             )
             failure_details = (
                 batch.failure_path.read_text(encoding="utf-8")
@@ -842,7 +843,7 @@ class CategoryWorkflowIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 category_guardrail_provider=_ScriptedGuardrailProvider(),
                 taxonomy_pack=taxonomy,
                 constitution_registry=constitutions,
-                grounding_pipeline=GroundingPipeline(mode=GroundingMode.BENCHMARK_ASSISTED),
+                grounding_pipeline=GroundingPipeline(mode=GroundingMode.BLIND),
             )
 
             failure_details = (
@@ -900,6 +901,29 @@ class CategoryWorkflowIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 ("A.4.f",),
             )
             self.assertEqual(len(result.category_results), 2)
+            terminal = result.model_dump(mode="python")
+            terminal.update(
+                constitution_route_action="review_required",
+                category_results=(),
+                verdicts=(),
+                judge_failures=(),
+                aggregate=AggregateDecision(
+                    decision_status=DecisionStatus.REVIEW_REQUIRED,
+                    response_compliance_level=None,
+                    provisional_level=None,
+                    oversensitive=None,
+                    conflict_codes=("INSUFFICIENT_GROUNDING",),
+                    resolution_source="review",
+                ),
+            )
+            self.assertEqual(
+                EvaluationResult.model_validate(terminal).routed_category_ids,
+                result.routed_category_ids,
+            )
+            with self.assertRaisesRegex(ValueError, "category results do not cover"):
+                EvaluationResult.model_validate(
+                    {**terminal, "constitution_route_action": "evaluate"}
+                )
             self.assertEqual(
                 result.aggregate.response_compliance_level,
                 ResponseComplianceLevel.PARTIALLY_COMPLIANT,

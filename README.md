@@ -47,6 +47,12 @@ uv run mypy
 TargetResponse → blind 模型 Grounding → DeepSeek Intent/路由与 Harm Enablement → Llama Guard
 逐小类 Compliance → 确定性聚合/受限仲裁 → EvaluationResult 与验收报告。
 
+新评估运行只允许 `blind` Grounding：模型或经核验的 sidecar 必须从原始媒体提取
+可观察事实，Benchmark 自带的意图、风险类别与攻击类型不得充当 Grounding 证据或
+Request Analyzer 的可信答案。旧的 assisted 结果文件仅供历史对照，当前类型合约不再
+加载或续跑它们。纯文本样本无需媒体观察；图像、音频、视频样本若无可用观察，
+应显式进入待复核，不能回退到数据集标签。
+
 ```powershell
 python scripts/run_e2e_acceptance.py `
   --input <CANONICAL_JSONL> `

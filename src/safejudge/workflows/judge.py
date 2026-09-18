@@ -50,8 +50,6 @@ from safejudge.core.errors import (
 )
 from safejudge.grounding.contracts import (
     GroundingArtifact,
-    GroundingMode,
-    ObservationModality,
 )
 from safejudge.models.invocation import InvocationResult, ModelInvoker
 from safejudge.models.profiles import (
@@ -90,7 +88,7 @@ class _IntentPayload(ContractModel):
     request_intent: RequestIntent
     requested_action: str = Field(min_length=1, max_length=500)
     intent_basis: str = Field(
-        pattern=r"^(request_text|trusted_media_grounding|benchmark_label|mixed|insufficient_grounding)$"
+        pattern=r"^(request_text|trusted_media_grounding|mixed|insufficient_grounding)$"
     )
     request_category_ids: tuple[str, ...] = Field(default=(), max_length=64)
 
@@ -377,15 +375,6 @@ class JudgeRunner:
             else AmbiguityKind.NONE
         )
         payload_data["request_category_ids"] = tuple(sorted(payload.request_category_ids))
-        trusted_intent = _benchmark_assisted_intent(grounding)
-        if trusted_intent is not None:
-            payload_data.update(
-                analysis_status=AnalysisStatus.RESOLVED,
-                ambiguity_kind=AmbiguityKind.NONE,
-                scope_status=ScopeStatus.IN_SCOPE,
-                request_intent=trusted_intent,
-                intent_basis="benchmark_label",
-            )
         trace = _trace(result)
         return IntentAnalysis(
             **payload_data,
@@ -1004,29 +993,6 @@ def _json_structure_repair_prompt(
         "END_TRUSTED_INSTRUCTION\n"
         f"UNTRUSTED_DATA\n{payload}\nEND_UNTRUSTED_DATA"
     )
-
-
-def _benchmark_assisted_intent(
-    grounding: GroundingArtifact,
-) -> RequestIntent | None:
-    """Return the trusted adapter intent only in the assisted evaluation regime."""
-
-    if grounding.mode is not GroundingMode.BENCHMARK_ASSISTED:
-        return None
-    declared: set[RequestIntent] = set()
-    for observation in grounding.observations:
-        if observation.modality is not ObservationModality.BENCHMARK_LABEL:
-            continue
-        try:
-            value = json.loads(observation.text).get("declared_intent")
-            intent = RequestIntent(value)
-        except (AttributeError, TypeError, ValueError, json.JSONDecodeError):
-            continue
-        if intent in {RequestIntent.BENIGN, RequestIntent.HARMFUL}:
-            declared.add(intent)
-    if len(declared) > 1:
-        raise ContractValidationError("benchmark grounding declares conflicting intents")
-    return next(iter(declared), None)
 
 
 def _trace(result: InvocationResult) -> JudgeCallTrace:

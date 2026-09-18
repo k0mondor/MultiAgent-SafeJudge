@@ -179,7 +179,7 @@ class EvaluationContext(BaseModel):
     taxonomy_pack: TaxonomyPack
     constitution_registry: ConstitutionRegistry
     grounding_pipeline: GroundingPipeline = Field(
-        default_factory=lambda: GroundingPipeline(mode=GroundingMode.BENCHMARK_ASSISTED)
+        default_factory=lambda: GroundingPipeline(mode=GroundingMode.BLIND)
     )
     target_runner: TargetRunner | None = None
     judge_parameters: dict[str, JsonValue] = Field(default_factory=dict)

@@ -52,6 +52,7 @@ class ModelProfile(ContractModel):
     openrouter_response_healing: bool = False
     qualification_status: QualificationStatus = QualificationStatus.CANDIDATE
     qualification_report: str | None = None
+    grounding_media_types: frozenset[Literal["image", "audio", "video"]] | None = None
 
     @model_validator(mode="after")
     def role_and_output_mode_are_compatible(self) -> ModelProfile:
@@ -80,6 +81,8 @@ class ModelProfile(ContractModel):
             raise ValueError("specialized judge adapters require a judge-only profile")
         if guardrail_judge and self.structured_output_mode is not StructuredOutputMode.NONE:
             raise ValueError("Llama Guard uses its native text classification output")
+        if self.grounding_media_types is not None and ModelRole.GROUNDING not in self.roles:
+            raise ValueError("grounding_media_types requires the grounding role")
         return self
 
     def supports_role(self, role: ModelRole) -> bool:
@@ -94,6 +97,11 @@ class ModelProfile(ContractModel):
         if self.judge_adapter is JudgeAdapterKind.CHAT_JSON:
             # Preserve historical fingerprints created before adapters were configurable.
             payload.pop("judge_adapter")
+        if self.grounding_media_types is None:
+            # Preserve fingerprints of profiles defined before media capabilities.
+            payload.pop("grounding_media_types")
+        else:
+            payload["grounding_media_types"] = sorted(self.grounding_media_types)
         encoded = json.dumps(
             payload,
             ensure_ascii=False,

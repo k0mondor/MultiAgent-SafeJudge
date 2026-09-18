@@ -1,4 +1,4 @@
-"""Provider-neutral grounding pipeline with explicit blind/assisted behavior."""
+"""Provider-neutral blind grounding pipeline."""
 
 from __future__ import annotations
 
@@ -19,7 +19,6 @@ from safejudge.grounding.contracts import (
     GroundingMode,
     GroundingObservation,
     GroundingStatus,
-    ObservationModality,
     RawGroundingObservation,
 )
 
@@ -55,9 +54,7 @@ class GroundingPipeline:
         self.mode = mode
         self.tools = tools
         self.pipeline_id = pipeline_id
-        self.pipeline_version = pipeline_version or (
-            "1.1" if mode is GroundingMode.BENCHMARK_ASSISTED else "1.0"
-        )
+        self.pipeline_version = pipeline_version or "1.0"
 
     @property
     def fingerprint(self) -> str:
@@ -84,8 +81,6 @@ class GroundingPipeline:
         *,
         context: InvocationContext,
     ) -> GroundingArtifact:
-        if self.mode is GroundingMode.BENCHMARK_ASSISTED:
-            return self._benchmark_artifact(sample)
         media = tuple(part.media for part in sample.parts if isinstance(part, MediaPart))
         if not media:
             return GroundingArtifact.create(
@@ -143,41 +138,4 @@ class GroundingPipeline:
             pipeline_hash=self.fingerprint,
             observations=observations,
             error_codes=tuple(sorted(error_codes)),
-        )
-
-    def _benchmark_artifact(
-        self,
-        sample: CanonicalMultimodalSample,
-    ) -> GroundingArtifact:
-        context = sample.request_context
-        paired_text = sample.metadata.get("corresponding_text")
-        if not isinstance(paired_text, str) or not paired_text.strip():
-            paired_text = None
-        text = json.dumps(
-            {
-                "declared_intent": context.intent.value,
-                "declared_risk_category": context.risk_category,
-                "declared_attack_type": context.attack_type,
-                "official_corresponding_text": paired_text,
-            },
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-        raw = RawGroundingObservation(
-            modality=ObservationModality.BENCHMARK_LABEL,
-            text=text,
-            confidence=1,
-            tool_id="benchmark-adapter-context",
-            tool_version="1.1",
-        )
-        observation = GroundingObservation.from_raw(raw, evidence_id="G000")
-        return GroundingArtifact.create(
-            sample_id=sample.sample_id,
-            mode=self.mode,
-            status=GroundingStatus.COMPLETE,
-            pipeline_id=self.pipeline_id,
-            pipeline_version=self.pipeline_version,
-            pipeline_hash=self.fingerprint,
-            observations=(observation,),
         )

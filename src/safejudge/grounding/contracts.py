@@ -1,4 +1,4 @@
-"""Versioned contracts for blind and benchmark-assisted request grounding."""
+"""Versioned contracts for blind request grounding."""
 
 from __future__ import annotations
 
@@ -15,7 +15,6 @@ from safejudge.contracts.dataset import MediaType
 
 class GroundingMode(StrEnum):
     BLIND = "blind"
-    BENCHMARK_ASSISTED = "benchmark_assisted"
 
 
 class GroundingStatus(StrEnum):
@@ -32,7 +31,6 @@ class ObservationModality(StrEnum):
     VIDEO_OCR = "video_ocr"
     VIDEO_ASR = "video_asr"
     VIDEO_VLM = "video_vlm"
-    BENCHMARK_LABEL = "benchmark_label"
 
 
 class RawGroundingObservation(ContractModel):

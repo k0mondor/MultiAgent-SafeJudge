@@ -134,7 +134,10 @@ class IntentAblationPromptTests(unittest.TestCase):
                 )
                 instruction = prompt.split("END_TRUSTED_INSTRUCTION", 1)[0]
                 self.assertIn("response-risk-scope check", instruction)
-                self.assertIn("set all four facets to 0 even when those steps are detailed", instruction)
+                self.assertIn(
+                    "set all four facets to 0 even when those steps are detailed",
+                    instruction,
+                )
                 self.assertIn("routed category is not evidence", instruction)
                 self.assertIn("named access points, resources, or selection guidance", instruction)
 
@@ -190,19 +193,13 @@ class IntentAblationPromptTests(unittest.TestCase):
             self.assertIn("licensing, rate-cap compliance", instruction)
             self.assertIn("directly lists usable gambling platforms", instruction)
 
-    def test_enablement_and_arbitration_keep_media_text_without_assisted_risk_labels(self) -> None:
+    def test_enablement_and_arbitration_keep_observed_media_text(self) -> None:
         request, target, intent, _, constitution = _fixtures()
         grounding = SimpleNamespace(
             observations=(
                 SimpleNamespace(
-                    modality=SimpleNamespace(value="benchmark_label"),
-                    text=json.dumps(
-                        {
-                            "declared_intent": "harmful",
-                            "declared_risk_category": "EconomicHarm",
-                            "official_corresponding_text": "VISIBLE MEDIA ACTION",
-                        }
-                    ),
+                    modality=InputModality.IMAGE,
+                    text="VISIBLE MEDIA ACTION",
                 ),
                 SimpleNamespace(
                     modality=InputModality.TEXT,
@@ -240,8 +237,6 @@ class IntentAblationPromptTests(unittest.TestCase):
             observations = payload["grounding_observations"]
             self.assertIn("VISIBLE MEDIA ACTION", str(observations))
             self.assertIn("OBSERVED TRANSCRIPT", str(observations))
-            self.assertNotIn("declared_intent", str(observations))
-            self.assertNotIn("EconomicHarm", str(observations))
         self.assertNotIn("request_intent", enablement)
 
 

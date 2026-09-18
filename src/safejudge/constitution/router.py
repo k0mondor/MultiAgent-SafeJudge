@@ -16,9 +16,7 @@ from safejudge.contracts.dataset import RequestIntent
 from safejudge.contracts.judging import AnalysisStatus, IntentAnalysis, ScopeStatus
 from safejudge.grounding.contracts import (
     GroundingArtifact,
-    GroundingMode,
     GroundingStatus,
-    ObservationModality,
 )
 from safejudge.taxonomy.contracts import TaxonomyPack
 
@@ -87,19 +85,6 @@ def route_constitution(
 ) -> ConstitutionRoute:
     if intent.scope_id != pack.scope_id or grounding.status is not GroundingStatus.COMPLETE:
         scope_status = ScopeStatus.UNKNOWN
-    elif grounding.mode is GroundingMode.BENCHMARK_ASSISTED:
-        has_label = any(
-            item.modality is ObservationModality.BENCHMARK_LABEL for item in grounding.observations
-        )
-        scope_status = (
-            ScopeStatus.IN_SCOPE
-            if has_label
-            and (
-                intent.request_intent in {RequestIntent.BENIGN, RequestIntent.HARMFUL}
-                or intent.scope_status is ScopeStatus.IN_SCOPE
-            )
-            else ScopeStatus.UNKNOWN
-        )
     else:
         scope_status = intent.scope_status
     if scope_status is ScopeStatus.OUT_OF_SCOPE:
@@ -159,12 +144,7 @@ def route_categories(
     response_added_ids = set(response_added_category_ids)
     if not response_added_ids.issubset(selected_ids):
         raise ValueError("response-added categories must be included in category_ids")
-    if grounding.status is not GroundingStatus.COMPLETE or (
-        grounding.mode is GroundingMode.BENCHMARK_ASSISTED
-        and not any(
-            item.modality is ObservationModality.BENCHMARK_LABEL for item in grounding.observations
-        )
-    ):
+    if grounding.status is not GroundingStatus.COMPLETE:
         scope_status = ScopeStatus.UNKNOWN
     else:
         scope_status = intent.scope_status

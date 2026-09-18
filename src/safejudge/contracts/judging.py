@@ -180,7 +180,6 @@ class IntentAnalysis(ContractModel):
     intent_basis: Literal[
         "request_text",
         "trusted_media_grounding",
-        "benchmark_label",
         "mixed",
         "insufficient_grounding",
     ]
@@ -706,8 +705,14 @@ class EvaluationResult(ContractModel):
             raise ValueError("request analysis and category compatibility view do not match")
         if self.category_analysis is not None:
             result_ids = {item.category_id for item in self.category_results}
-            if result_ids != set(self.routed_category_ids):
+            # A terminal review can retain tentative category routing without
+            # running any category panel. Only evaluated routes need coverage.
+            if self.constitution_route_action == "evaluate" and result_ids != set(
+                self.routed_category_ids
+            ):
                 raise ValueError("category results do not cover routed categories")
+            if self.constitution_route_action != "evaluate" and self.category_results:
+                raise ValueError("terminal category route cannot contain category results")
             axes = {verdict.axis for verdict in self.verdicts}
             failed_axes = {failure.axis for failure in self.judge_failures}
             expected_global_axes = (

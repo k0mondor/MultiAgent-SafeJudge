@@ -209,7 +209,7 @@ async def run_evaluation_batch(
         for constitution_id in category.constitution_ids:
             constitution_registry.get(constitution_id)
     resolved_grounding = grounding_pipeline or GroundingPipeline(
-        mode=GroundingMode.BENCHMARK_ASSISTED
+        mode=GroundingMode.BLIND
     )
     graph_context = EvaluationContext(
         invocation=context,
