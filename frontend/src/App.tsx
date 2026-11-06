@@ -12,6 +12,8 @@ import Cases from './Cases'
 import '@xyflow/react/dist/style.css'
 import './styles.css'
 
+const base=new URL('.',document.baseURI).pathname
+const routePath=()=>location.pathname.startsWith(base)?'/'+location.pathname.slice(base.length):location.pathname
 const shortModel=(profile:string)=>{
  const id=registry.models.find(m=>m.profile_id===profile)?.model_id||profile
  return ({'deepseek/deepseek-v4-flash':'DeepSeek V4 Flash','z-ai/glm-4.6v':'GLM-4.6V','bytedance-seed/seed-2.0-mini':'Seed 2.0 Mini','meta-llama/llama-guard-4-12b':'Llama Guard 4 12B'} as Record<string,string>)[id]||id.split('/').at(-1)!
@@ -48,15 +50,15 @@ function OverviewRegions({onEnter}:{onEnter:(stage:number)=>void}){
 }
 const cameraEase=(t:number)=>1-Math.pow(1-t,4)
 export default function App(){
- const [route,setRoute]=useState(location.pathname==='/models'?'models':location.pathname==='/cases'?'cases':'flow')
+ const [route,setRoute]=useState(routePath()==='/models'?'models':routePath()==='/cases'?'cases':'flow')
  const [models,setModels]=useState(readSelection)
  const [policy,setPolicy]=useState('1.3')
  const [notice,setNotice]=useState('')
- const navigate=useCallback((next:string)=>{history.pushState({},'',next==='flow'?'/':`/${next}`);setRoute(next);window.scrollTo(0,0)},[])
- useEffect(()=>{const pop=()=>setRoute(location.pathname==='/models'?'models':location.pathname==='/cases'?'cases':'flow');window.addEventListener('popstate',pop);return()=>window.removeEventListener('popstate',pop)},[])
+ const navigate=useCallback((next:string)=>{history.pushState({},'',next==='flow'?base:`${base}${next}`);setRoute(next);window.scrollTo(0,0)},[])
+ useEffect(()=>{const pop=()=>setRoute(routePath()==='/models'?'models':routePath()==='/cases'?'cases':'flow');window.addEventListener('popstate',pop);return()=>window.removeEventListener('popstate',pop)},[])
  useEffect(()=>{try{localStorage.setItem('safejudge-models',JSON.stringify(models))}catch{setNotice('当前浏览器无法保存配置，刷新后将恢复默认。')}},[models])
  useEffect(()=>{document.title=`SafeJudge · ${{flow:'评估流程',models:'模型配置',cases:'案例展示'}[route]}`},[route])
- return <><header className="site-header"><a className="wordmark" href="/" onClick={e=>{e.preventDefault();navigate('flow')}}>SafeJudge</a><span className="project-name">MultiAgent-SafeJudge</span><nav aria-label="主导航">{[['flow','评估流程'],['models','模型配置'],['cases','案例展示']].map(([r,label])=><a key={r} href={r==='flow'?'/':`/${r}`} aria-current={route===r?'page':undefined} onClick={e=>{if(!e.ctrlKey&&!e.metaKey){e.preventDefault();navigate(r)}}}>{label}</a>)}</nav></header>
+ return <><header className="site-header"><a className="wordmark" href={base} onClick={e=>{e.preventDefault();navigate('flow')}}>SafeJudge</a><span className="project-name">MultiAgent-SafeJudge</span><nav aria-label="主导航">{[['flow','评估流程'],['models','模型配置'],['cases','案例展示']].map(([r,label])=><a key={r} href={r==='flow'?base:`${base}${r}`} aria-current={route===r?'page':undefined} onClick={e=>{if(!e.ctrlKey&&!e.metaKey){e.preventDefault();navigate(r)}}}>{label}</a>)}</nav></header>
  {route==='flow'?<ReactFlowProvider><Explorer models={models} policy={policy} navigate={navigate}/></ReactFlowProvider>:route==='models'?<main className="settings-page"><div className="page-heading"><div><h1>模型配置</h1><p>查看各节点使用的模型，调整本地展示方案。</p></div><Button variant="outline" onClick={()=>{setModels(defaults);setPolicy('1.3');setNotice('已恢复默认展示方案')}}><RotateCcw/>恢复默认</Button></div><p className="settings-note">配置仅影响本地展示，不调用模型，也不修改后端实验配置。</p><div className="model-list">{(Object.keys(roleLabels) as Role[]).map(role=><Card key={role}><CardContent className="model-row"><div><h2>{roleLabels[role]}</h2><p>{role==='judge'?'请求分析、回答风险补充、危害评估、过度拒绝与仲裁':role==='guardrail'?'逐小类 Compliance 判断':role==='grounding'?'从原始媒体提取可观察事实':'生成并冻结待评估回答'}</p></div><div className="model-field"><label htmlFor={`model-${role}`}>模型 Profile</label><select id={`model-${role}`} value={models[role]} onChange={e=>{setModels({...models,[role]:e.target.value});setNotice('展示配置已更新')}}>{available(role).map(m=><option key={m.profile_id} value={m.profile_id}>{shortModel(m.profile_id)} · {m.profile_id}</option>)}</select><code>{models[role]}</code><small>注册状态：{registry.models.find(m=>m.profile_id===models[role])?.qualification_status==='approved'?'已核验':'候选配置'}</small></div></CardContent></Card>)}</div><div className="policy-row"><div><h2>聚合策略版本</h2><p>版本决定等级阈值与冲突处理规则。</p></div><select aria-label="聚合策略版本" value={policy} onChange={e=>setPolicy(e.target.value)}>{registry.policies.map(p=><option key={p.aggregator_version} value={p.aggregator_version}>v{p.aggregator_version} · L2 阈值 {p.l2_threshold}</option>)}</select></div><p className="source-note">来源：config/models.toml · config/aggregators/shifted-product-v1.toml</p><div role="status" className="save-notice">{notice}</div></main>:<Cases/>}
  </>
 }

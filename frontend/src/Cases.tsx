@@ -18,7 +18,7 @@ function CaseDetail({item}:{item:Case}){
  return <div className="case-expanded">
   <dl className="case-identity"><div><dt>数据集</dt><dd>{item.dataset}</dd></div><div><dt>被测模型</dt><dd>{item.targetModel}</dd></div><div><dt>案例 ID</dt><dd>{item.id}</dd></div></dl>
   <div className="case-columns"><section className="case-reading"><h3>请求</h3>
-   {item.media.map(media=>media.type==='image'?<a className="case-image" href={media.url} target="_blank" rel="noreferrer" key={media.url} aria-label="打开原始图片"><img src={media.url} alt={`${item.title}的原始输入图片`}/><Maximize2 size={16}/></a>:<audio key={media.url} controls preload="metadata" src={media.url} aria-label="原始输入音频">浏览器不支持音频播放。<a href={media.url}>下载原始音频</a></audio>)}
+   {item.media.map(media=>media.type==='image'?<a className="case-image" href={'.'+media.url} target="_blank" rel="noreferrer" key={media.url} aria-label="打开原始图片"><img src={'.'+media.url} alt={`${item.title}的原始输入图片`}/><Maximize2 size={16}/></a>:<audio key={media.url} controls preload="metadata" src={'.'+media.url} aria-label="原始输入音频">浏览器不支持音频播放。<a href={'.'+media.url}>下载原始音频</a></audio>)}
    <p className="case-request">{item.requestZh}</p>
    <details className="case-original"><summary>原始请求</summary><p>{item.request}</p></details>
    <h3 className="case-answer-heading">回答 <span>译文 · 节选</span></h3>
