@@ -1,11 +1,10 @@
 import React, {useCallback, useEffect, useMemo, useRef, useState} from 'react'
 import {ReactFlow, ReactFlowProvider, Handle, Position, MarkerType, useReactFlow, useViewport, type Node, type NodeProps} from '@xyflow/react'
-import {ArrowLeft, ArrowRight, Maximize, Minus, Plus, RotateCcw, ArrowUpRight} from 'lucide-react'
+import {ArrowLeft, ArrowRight, Maximize, Minus, Plus, ArrowUpRight} from 'lucide-react'
 import {Button} from '@/components/ui/button'
-import {Card, CardContent} from '@/components/ui/card'
 import {Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription} from '@/components/ui/sheet'
 import {Tabs, TabsList, TabsTrigger, TabsContent} from '@/components/ui/tabs'
-import {catalog, stages, defaults, roleLabels, type NodeInfo, type Role} from './flow-data'
+import {catalog, stages, defaults, type NodeInfo, type Role} from './flow-data'
 import registry from './registry.json'
 import {FlowEdge} from './FlowEdge'
 import Cases from './Cases'
@@ -18,8 +17,6 @@ const shortModel=(profile:string)=>{
  const id=registry.models.find(m=>m.profile_id===profile)?.model_id||profile
  return ({'deepseek/deepseek-v4-flash':'DeepSeek V4 Flash','z-ai/glm-4.6v':'GLM-4.6V','bytedance-seed/seed-2.0-mini':'Seed 2.0 Mini','meta-llama/llama-guard-4-12b':'Llama Guard 4 12B'} as Record<string,string>)[id]||id.split('/').at(-1)!
 }
-const available=(role:Role)=>registry.models.filter(m=>role==='guardrail'?m.profile_id.includes('llama-guard'):m.roles?.includes(role)&&!m.profile_id.includes('llama-guard')&&!m.model_id?.includes('replace-with'))
-function readSelection(){try{const saved=JSON.parse(localStorage.getItem('safejudge-models')||'{}');return Object.fromEntries(Object.entries(defaults).map(([r,v])=>[r,available(r as Role).some(m=>m.profile_id===saved[r])?saved[r]:v])) as Record<Role,string>}catch{return defaults}}
 type FlowData=NodeInfo & {model?:string;open:()=>void;focused:boolean;arriving:boolean}
 function WorkflowNode({data}:NodeProps<Node<FlowData>>){return <div className={`workflow-node ${data.focused?'is-focused':''} ${data.arriving?'is-arriving':''}`}>
  <Handle type="target" position={Position.Left} id="left"/><Handle type="target" position={Position.Top} id="top"/><Handle type="target" position={Position.Bottom} id="bottom"/>
@@ -50,19 +47,17 @@ function OverviewRegions({onEnter}:{onEnter:(stage:number)=>void}){
 }
 const cameraEase=(t:number)=>t<0.5?4*t*t*t:1-Math.pow(-2*t+2,3)/2
 export default function App(){
- const [route,setRoute]=useState(routePath()==='/models'?'models':routePath()==='/cases'?'cases':'flow')
- const [models,setModels]=useState(readSelection)
- const [policy,setPolicy]=useState('1.3')
- const [notice,setNotice]=useState('')
+ const [route,setRoute]=useState(routePath()==='/cases'?'cases':'flow')
+ const models=defaults
+ const policy='1.3'
  const navigate=useCallback((next:string)=>{history.pushState({},'',next==='flow'?base:`${base}${next}`);setRoute(next);window.scrollTo(0,0)},[])
- useEffect(()=>{const pop=()=>setRoute(routePath()==='/models'?'models':routePath()==='/cases'?'cases':'flow');window.addEventListener('popstate',pop);return()=>window.removeEventListener('popstate',pop)},[])
- useEffect(()=>{try{localStorage.setItem('safejudge-models',JSON.stringify(models))}catch{setNotice('当前浏览器无法保存配置，刷新后将恢复默认。')}},[models])
- useEffect(()=>{document.title=`SafeJudge · ${{flow:'评估流程',models:'模型配置',cases:'案例展示'}[route]}`},[route])
- return <><header className="site-header"><a className="wordmark" href={base} onClick={e=>{e.preventDefault();navigate('flow')}}>SafeJudge</a><span className="project-name">MultiAgent-SafeJudge</span><nav aria-label="主导航">{[['flow','评估流程'],['models','模型配置'],['cases','案例展示']].map(([r,label])=><a key={r} href={r==='flow'?base:`${base}${r}`} aria-current={route===r?'page':undefined} onClick={e=>{if(!e.ctrlKey&&!e.metaKey){e.preventDefault();navigate(r)}}}>{label}</a>)}</nav></header>
- {route==='flow'?<ReactFlowProvider><Explorer models={models} policy={policy} navigate={navigate}/></ReactFlowProvider>:route==='models'?<main className="settings-page"><div className="page-heading"><div><h1>模型配置</h1><p>查看各节点使用的模型，调整本地展示方案。</p></div><Button variant="outline" onClick={()=>{setModels(defaults);setPolicy('1.3');setNotice('已恢复默认展示方案')}}><RotateCcw/>恢复默认</Button></div><p className="settings-note">配置仅影响本地展示，不调用模型，也不修改后端实验配置。</p><div className="model-list">{(Object.keys(roleLabels) as Role[]).map(role=><Card key={role}><CardContent className="model-row"><div><h2>{roleLabels[role]}</h2><p>{role==='judge'?'请求分析、回答风险补充、危害评估、过度拒绝与仲裁':role==='guardrail'?'逐小类 Compliance 判断':role==='grounding'?'从原始媒体提取可观察事实':'生成并冻结待评估回答'}</p></div><div className="model-field"><label htmlFor={`model-${role}`}>模型 Profile</label><select id={`model-${role}`} value={models[role]} onChange={e=>{setModels({...models,[role]:e.target.value});setNotice('展示配置已更新')}}>{available(role).map(m=><option key={m.profile_id} value={m.profile_id}>{shortModel(m.profile_id)} · {m.profile_id}</option>)}</select><code>{models[role]}</code><small>注册状态：{registry.models.find(m=>m.profile_id===models[role])?.qualification_status==='approved'?'已核验':'候选配置'}</small></div></CardContent></Card>)}</div><div className="policy-row"><div><h2>聚合策略版本</h2><p>版本决定等级阈值与冲突处理规则。</p></div><select aria-label="聚合策略版本" value={policy} onChange={e=>setPolicy(e.target.value)}>{registry.policies.map(p=><option key={p.aggregator_version} value={p.aggregator_version}>v{p.aggregator_version} · L2 阈值 {p.l2_threshold}</option>)}</select></div><p className="source-note">来源：config/models.toml · config/aggregators/shifted-product-v1.toml</p><div role="status" className="save-notice">{notice}</div></main>:<Cases/>}
+ useEffect(()=>{const pop=()=>setRoute(routePath()==='/cases'?'cases':'flow');window.addEventListener('popstate',pop);return()=>window.removeEventListener('popstate',pop)},[])
+ useEffect(()=>{document.title=`SafeJudge · ${{flow:'评估流程',cases:'案例展示'}[route]}`},[route])
+ return <><header className="site-header"><a className="wordmark" href={base} onClick={e=>{e.preventDefault();navigate('flow')}}>SafeJudge</a><span className="project-name">MultiAgent-SafeJudge</span><nav aria-label="主导航">{[['flow','评估流程'],['cases','案例展示']].map(([r,label])=><a key={r} href={r==='flow'?base:`${base}${r}`} aria-current={route===r?'page':undefined} onClick={e=>{if(!e.ctrlKey&&!e.metaKey){e.preventDefault();navigate(r)}}}>{label}</a>)}</nav></header>
+ {route==='flow'?<ReactFlowProvider><Explorer models={models} policy={policy}/></ReactFlowProvider>:<Cases/>}
  </>
 }
-function Explorer({models,policy,navigate}:{models:Record<Role,string>;policy:string;navigate:(route:string)=>void}){
+function Explorer({models,policy}:{models:Record<Role,string>;policy:string}){
  const [stage,setStage]=useState(0),[selected,setSelected]=useState<string|null>(null),[overview,setOverview]=useState(false),[zoom,setZoom]=useState(1)
  const {fitView,getViewport,setViewport,zoomTo}=useReactFlow()
  const [focusOpen,setFocusOpen]=useState(false)
@@ -148,7 +143,7 @@ function Explorer({models,policy,navigate}:{models:Record<Role,string>;policy:st
  <ReactFlow nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes} nodesDraggable={false} nodesConnectable={false} elementsSelectable={false} fitView fitViewOptions={{padding:0.12,maxZoom:1,minZoom:0.85}} minZoom={0.12} maxZoom={2.5} zoomOnScroll={false} zoomOnPinch={false} zoomActivationKeyCode={null} zoomOnDoubleClick={overview} panOnScroll={false} preventScrolling={overview} onMove={(_,v)=>setZoom(v.zoom)} onPaneClick={closeFocus} proOptions={{hideAttribution:false}} aria-label="安全评估流程画布">
  {overview&&<OverviewRegions onEnter={changeStage}/>}
  </ReactFlow>
- <div className="canvas-controls"><Button variant="ghost" size="icon" aria-label="放大画布" onClick={()=>changeZoom(1)}><Plus/></Button><Button variant="ghost" size="icon" aria-label="缩小画布" onClick={()=>changeZoom(-1)}><Minus/></Button><span>{Math.round(zoom*100)}%</span><Button variant="ghost" aria-pressed={reducedMotion} onClick={()=>setReducedMotion(v=>!v)}>{reducedMotion?'恢复动效':'减少动效'}</Button><Button variant="ghost" size="icon" aria-label="适应画布" onClick={fit}><Maximize/></Button></div><p className="canvas-hint">{overview?'滚轮缩放 · 拖动画布浏览 · 点击节点进入阶段':'滚轮缩放 · 顶部切换阶段 · 点击节点聚焦'}</p></div>
- <Sheet open={focusOpen} onOpenChange={isOpen=>{if(!isOpen)closeFocus()}}><SheetContent className="node-sheet" onCloseAutoFocus={e=>e.preventDefault()}><SheetHeader><SheetTitle>{selection?.title}</SheetTitle><SheetDescription>{selection?.summary}</SheetDescription></SheetHeader>{selection&&<Tabs defaultValue="function" key={selection.id}><TabsList><TabsTrigger value="function">功能</TabsTrigger><TabsTrigger value="io">输入与输出</TabsTrigger><TabsTrigger value="model">{selection.role?'模型':'规则与来源'}</TabsTrigger></TabsList><TabsContent value="function"><div className="detail-copy">{selection.details.map((s,i)=><div key={s}><span>{String(i+1).padStart(2,'0')}</span><p>{s}</p></div>)}</div>{selection.id==='aggregate'&&<div className="formula"><h3>当前策略 v{policy}</h3><code>V × (S+1) × (C+1) × (F+1) × (1+0.5E)</code><p>L0：0<br/>L1：0 &lt; 分数 &lt; {policyData.l2_threshold}<br/>L2：分数 ≥ {policyData.l2_threshold}</p></div>}</TabsContent><TabsContent value="io"><div className="io-section"><h3>输入</h3>{selection.inputs.map(s=><p key={s}>{s}</p>)}</div><div className="io-section"><h3>输出</h3>{selection.outputs.map(s=><p key={s}>{s}</p>)}</div></TabsContent><TabsContent value="model">{selection.role?<div className="model-detail"><h3>{shortModel(models[selection.role])}</h3><code>{models[selection.role]}</code><p>模型配置仅用于本地展示。</p><Button variant="outline" onClick={()=>navigate('models')}>查看模型配置<ArrowUpRight/></Button></div>:<p className="rules-copy">由确定性代码或数据协议执行，不调用模型。</p>}<div className="source-block"><h3>实现来源</h3><code>{selection.source}</code></div></TabsContent></Tabs>}</SheetContent></Sheet>
+ <div className="canvas-controls"><Button variant="ghost" size="icon" aria-label="放大画布" onClick={()=>changeZoom(1)}><Plus/></Button><Button variant="ghost" size="icon" aria-label="缩小画布" onClick={()=>changeZoom(-1)}><Minus/></Button><span>{Math.round(zoom*100)}%</span><Button variant="ghost" aria-pressed={reducedMotion} onClick={()=>setReducedMotion(v=>!v)}>{reducedMotion?'恢复动效':'减少动效'}</Button><Button variant="ghost" size="icon" aria-label="适应画布" onClick={fit}><Maximize/></Button></div></div>
+ <Sheet open={focusOpen} onOpenChange={isOpen=>{if(!isOpen)closeFocus()}}><SheetContent className="node-sheet" onCloseAutoFocus={e=>e.preventDefault()}><SheetHeader><SheetTitle>{selection?.title}</SheetTitle><SheetDescription>{selection?.summary}</SheetDescription></SheetHeader>{selection&&<Tabs defaultValue="function" key={selection.id}><TabsList><TabsTrigger value="function">功能</TabsTrigger><TabsTrigger value="io">输入与输出</TabsTrigger><TabsTrigger value="model">{selection.role?'模型':'规则与来源'}</TabsTrigger></TabsList><TabsContent value="function"><div className="detail-copy">{selection.details.map((s,i)=><div key={s}><span>{String(i+1).padStart(2,'0')}</span><p>{s}</p></div>)}</div>{selection.id==='aggregate'&&<div className="formula"><h3>当前策略 v{policy}</h3><code>V × (S+1) × (C+1) × (F+1) × (1+0.5E)</code><p>L0：0<br/>L1：0 &lt; 分数 &lt; {policyData.l2_threshold}<br/>L2：分数 ≥ {policyData.l2_threshold}</p></div>}</TabsContent><TabsContent value="io"><div className="io-section"><h3>输入</h3>{selection.inputs.map(s=><p key={s}>{s}</p>)}</div><div className="io-section"><h3>输出</h3>{selection.outputs.map(s=><p key={s}>{s}</p>)}</div></TabsContent><TabsContent value="model">{selection.role?<div className="model-detail"><h3>{shortModel(models[selection.role])}</h3><code>{models[selection.role]}</code><p>模型配置仅用于本地展示。</p></div>:<p className="rules-copy">由确定性代码或数据协议执行，不调用模型。</p>}<div className="source-block"><h3>实现来源</h3><code>{selection.source}</code></div></TabsContent></Tabs>}</SheetContent></Sheet>
  </main>
 }
