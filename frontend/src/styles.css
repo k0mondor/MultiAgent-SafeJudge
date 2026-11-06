@@ -50,3 +50,5 @@ body.reduced-motion .flow-reveal{transition:none}body.reduced-motion [data-slot=
 .overview-region:after{content:"";position:absolute;inset:37px 0 0;border:1px solid #d5d9e0;border-radius:12px;pointer-events:none}
 .overview-region:hover:after{border-color:#8c97a8}
 .overview-region-label{top:0}
+
+.motion-control{position:absolute;bottom:40px;left:calc(4% + 168px);z-index:4;min-width:86px;height:36px;padding:0 12px;white-space:nowrap;font-size:12px;box-shadow:none;background:#fff;border:1px solid #d8dde4;border-radius:8px}.canvas-controls button{flex-shrink:0}body.node-focus-active .motion-control{filter:blur(1.6px);opacity:.7}
