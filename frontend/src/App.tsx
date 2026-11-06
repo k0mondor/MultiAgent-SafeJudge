@@ -48,7 +48,7 @@ function OverviewRegions({onEnter}:{onEnter:(stage:number)=>void}){
   })}
  </div>
 }
-const cameraEase=(t:number)=>1-Math.pow(1-t,4)
+const cameraEase=(t:number)=>t<0.5?4*t*t*t:1-Math.pow(-2*t+2,3)/2
 export default function App(){
  const [route,setRoute]=useState(routePath()==='/models'?'models':routePath()==='/cases'?'cases':'flow')
  const [models,setModels]=useState(readSelection)
@@ -63,7 +63,7 @@ export default function App(){
  </>
 }
 function Explorer({models,policy,navigate}:{models:Record<Role,string>;policy:string;navigate:(route:string)=>void}){
- const [stage,setStage]=useState(1),[selected,setSelected]=useState<string|null>(null),[overview,setOverview]=useState(false),[zoom,setZoom]=useState(1)
+ const [stage,setStage]=useState(0),[selected,setSelected]=useState<string|null>(null),[overview,setOverview]=useState(false),[zoom,setZoom]=useState(1)
  const {fitView,getViewport,setViewport,zoomTo}=useReactFlow()
  const [focusOpen,setFocusOpen]=useState(false)
  const [steps,setSteps]=useState([0,0,0,0])
@@ -72,7 +72,10 @@ function Explorer({models,policy,navigate}:{models:Record<Role,string>;policy:st
  const closeTimer=useRef<ReturnType<typeof setTimeout>|undefined>(undefined)
  const stageTimer=useRef<ReturnType<typeof setTimeout>|undefined>(undefined)
  const trigger=useRef<HTMLElement|null>(null)
- const reduce=useRef(window.matchMedia('(prefers-reduced-motion: reduce)').matches)
+ const [reducedMotion,setReducedMotion]=useState(false)
+ const reduce=useRef(false)
+ reduce.current=reducedMotion
+ useEffect(()=>{document.body.classList.toggle('reduced-motion',reducedMotion);return()=>document.body.classList.remove('reduced-motion')},[reducedMotion])
  const canvas=useRef<HTMLDivElement>(null)
  const current=stages[stage],selection=selected?catalog[selected]:null
  const zoomTarget=useRef<number|null>(null)
@@ -94,7 +97,7 @@ function Explorer({models,policy,navigate}:{models:Record<Role,string>;policy:st
   const width=canvas.current?.clientWidth||1200,height=canvas.current?.clientHeight||700
   const targetZoom=Math.min(1.35,Math.max(1.18,returnView.current.zoom*1.25))
   void setViewport({x:(width-440)/2-(x+140)*targetZoom,y:height/2-(y+80)*targetZoom,zoom:targetZoom},
-    {duration:reduce.current?0:620,ease:cameraEase,interpolate:'linear'})
+    {duration:reduce.current?0:780,ease:cameraEase,interpolate:'linear'})
  },[getViewport,setViewport,selected])
  const closeFocus=useCallback(()=>{
   if(!focusOpen)return
@@ -112,7 +115,7 @@ function Explorer({models,policy,navigate}:{models:Record<Role,string>;policy:st
  const edges=useMemo(()=>{const groups=overview?stages.map((s,i)=>({s,i})):[{s:current,i:stage}];const all=groups.flatMap(({s,i})=>s.edges.map(([a,b,label,kind],j)=>({id:`${i}-edge-${j}`,source:`${i}-${a}`,target:`${i}-${b}`,sourceHandle:kind==='vertical'?'out-bottom':'right',targetHandle:kind==='vertical'?'top':kind==='bottom'?'bottom':'left',type:kind==='bottom'?'smoothstep':'default',label,markerEnd:{type:MarkerType.ArrowClosed,color:'#858b96',width:16,height:16},style:{stroke:'#858b96',strokeWidth:1.3},labelStyle:{fill:'#5d626c',fontSize:12},labelBgStyle:{fill:'#f2f3f5'},labelBgPadding:[7,4] as [number,number]})));if(overview){for(let i=0;i<3;i++){const sources=['input','routing','verdicts'];const targets=['request','facts','verdicts'];all.push({id:`bridge-${i}`,source:`${i}-${sources[i]}`,target:`${i+1}-${targets[i]}`,sourceHandle:'right',targetHandle:'left',type:'default',label:'下一阶段',markerEnd:{type:MarkerType.ArrowClosed,color:'#858b96',width:16,height:16},style:{stroke:'#858b96',strokeWidth:1.3},labelStyle:{fill:'#5d626c',fontSize:12},labelBgStyle:{fill:'#f2f3f5'},labelBgPadding:[7,4]})}}return all.map(edge=>({...edge,type:'flow',data:{orthogonal:edge.type==='smoothstep',progress:overview?0:steps[stage],muted:focusOpen&&!edge.source.endsWith(`-${selected}`)&&!edge.target.endsWith(`-${selected}`)}}))},[overview,current,stage,steps,focusOpen,selected])
  const changeStage=useCallback((next:number)=>{clearTimeout(stageTimer.current);clearTimeout(closeTimer.current);setArrivals([]);setFocusOpen(false);setSelected(null);setOverview(false);setStage(Math.max(0,Math.min(3,next)))},[])
  useEffect(()=>{const timer=setTimeout(fit,80);return()=>clearTimeout(timer)},[stage,overview,fit])
- useEffect(()=>{const media=window.matchMedia('(prefers-reduced-motion: reduce)');const update=()=>{reduce.current=media.matches};media.addEventListener('change',update);return()=>media.removeEventListener('change',update)},[])
+
  useEffect(()=>{
   const el=canvas.current;if(!el)return
   const handle=(e:WheelEvent)=>{
@@ -145,7 +148,7 @@ function Explorer({models,policy,navigate}:{models:Record<Role,string>;policy:st
  <ReactFlow nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes} nodesDraggable={false} nodesConnectable={false} elementsSelectable={false} fitView fitViewOptions={{padding:0.12,maxZoom:1,minZoom:0.85}} minZoom={0.12} maxZoom={2.5} zoomOnScroll={false} zoomOnPinch={false} zoomActivationKeyCode={null} zoomOnDoubleClick={overview} panOnScroll={false} preventScrolling={overview} onMove={(_,v)=>setZoom(v.zoom)} onPaneClick={closeFocus} proOptions={{hideAttribution:false}} aria-label="安全评估流程画布">
  {overview&&<OverviewRegions onEnter={changeStage}/>}
  </ReactFlow>
- <div className="canvas-controls"><Button variant="ghost" size="icon" aria-label="放大画布" onClick={()=>changeZoom(1)}><Plus/></Button><Button variant="ghost" size="icon" aria-label="缩小画布" onClick={()=>changeZoom(-1)}><Minus/></Button><span>{Math.round(zoom*100)}%</span><Button variant="ghost" size="icon" aria-label="适应画布" onClick={fit}><Maximize/></Button></div><p className="canvas-hint">{overview?'滚轮缩放 · 拖动画布浏览 · 点击节点进入阶段':'滚轮缩放 · 顶部切换阶段 · 点击节点聚焦'}</p></div>
+ <div className="canvas-controls"><Button variant="ghost" size="icon" aria-label="放大画布" onClick={()=>changeZoom(1)}><Plus/></Button><Button variant="ghost" size="icon" aria-label="缩小画布" onClick={()=>changeZoom(-1)}><Minus/></Button><span>{Math.round(zoom*100)}%</span><Button variant="ghost" aria-pressed={reducedMotion} onClick={()=>setReducedMotion(v=>!v)}>{reducedMotion?'恢复动效':'减少动效'}</Button><Button variant="ghost" size="icon" aria-label="适应画布" onClick={fit}><Maximize/></Button></div><p className="canvas-hint">{overview?'滚轮缩放 · 拖动画布浏览 · 点击节点进入阶段':'滚轮缩放 · 顶部切换阶段 · 点击节点聚焦'}</p></div>
  <Sheet open={focusOpen} onOpenChange={isOpen=>{if(!isOpen)closeFocus()}}><SheetContent className="node-sheet" onCloseAutoFocus={e=>e.preventDefault()}><SheetHeader><SheetTitle>{selection?.title}</SheetTitle><SheetDescription>{selection?.summary}</SheetDescription></SheetHeader>{selection&&<Tabs defaultValue="function" key={selection.id}><TabsList><TabsTrigger value="function">功能</TabsTrigger><TabsTrigger value="io">输入与输出</TabsTrigger><TabsTrigger value="model">{selection.role?'模型':'规则与来源'}</TabsTrigger></TabsList><TabsContent value="function"><div className="detail-copy">{selection.details.map((s,i)=><div key={s}><span>{String(i+1).padStart(2,'0')}</span><p>{s}</p></div>)}</div>{selection.id==='aggregate'&&<div className="formula"><h3>当前策略 v{policy}</h3><code>V × (S+1) × (C+1) × (F+1) × (1+0.5E)</code><p>L0：0<br/>L1：0 &lt; 分数 &lt; {policyData.l2_threshold}<br/>L2：分数 ≥ {policyData.l2_threshold}</p></div>}</TabsContent><TabsContent value="io"><div className="io-section"><h3>输入</h3>{selection.inputs.map(s=><p key={s}>{s}</p>)}</div><div className="io-section"><h3>输出</h3>{selection.outputs.map(s=><p key={s}>{s}</p>)}</div></TabsContent><TabsContent value="model">{selection.role?<div className="model-detail"><h3>{shortModel(models[selection.role])}</h3><code>{models[selection.role]}</code><p>模型配置仅用于本地展示。</p><Button variant="outline" onClick={()=>navigate('models')}>查看模型配置<ArrowUpRight/></Button></div>:<p className="rules-copy">由确定性代码或数据协议执行，不调用模型。</p>}<div className="source-block"><h3>实现来源</h3><code>{selection.source}</code></div></TabsContent></Tabs>}</SheetContent></Sheet>
  </main>
 }
